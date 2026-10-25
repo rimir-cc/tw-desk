@@ -230,7 +230,7 @@ for (const copyButton of document.querySelectorAll("button.copy")) {
 
 function applyState(newState) {
 	state = newState;
-	$("#tw-version").textContent = "TiddlyWiki " + state.twVersion;
+	$("#tw-version").textContent = "v" + state.appVersion + " · TiddlyWiki " + state.twVersion;
 	$("#config-path").textContent = state.configPath;
 	$("#install-dir").textContent = state.installDir;
 	render();

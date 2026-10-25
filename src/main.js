@@ -82,6 +82,7 @@ function serverState(id) {
 
 function snapshot() {
 	return {
+		appVersion: app.getVersion(),
 		twVersion: TW_VERSION,
 		configPath: configPath(),
 		installDir: app.isPackaged ? path.dirname(process.execPath) : app.getAppPath(),

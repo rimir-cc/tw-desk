@@ -6,6 +6,7 @@ const $ = selector => document.querySelector(selector);
 let state = { wikis: [] };
 let logWikiId = null;
 let editingId = null;
+let dialogIncludes = []; // [{ path (absolute), readOnly, exists }] while the Edit dialog is open
 
 const STATUS_TEXT = { running: "running", starting: "starting…", stopped: "stopped", error: "error" };
 
@@ -68,6 +69,21 @@ function render() {
 			err.textContent = wiki.error;
 			info.append(err);
 		}
+		if (wiki.infoError) {
+			const err = document.createElement("div");
+			err.className = "wiki-error";
+			err.textContent = wiki.infoError;
+			info.append(err);
+		}
+		if (wiki.includes.length) {
+			const line = document.createElement("div");
+			line.className = "wiki-includes";
+			line.append("includes:");
+			for (const include of wiki.includes) {
+				line.append(includeChip(folderName(include.resolved) + (include.readOnly ? " (read-only)" : ""), include));
+			}
+			info.append(line);
+		}
 
 		const actions = document.createElement("div");
 		actions.className = "wiki-actions";
@@ -98,6 +114,61 @@ function render() {
 		}
 	}
 }
+
+function folderName(folder) {
+	return folder.split(/[\\/]/).filter(Boolean).pop() || folder;
+}
+
+function includeChip(text, include) {
+	const chip = document.createElement("span");
+	chip.className = "chip" + (include.exists ? "" : " missing");
+	chip.textContent = text + (include.exists ? "" : " (missing)");
+	chip.title = include.resolved + (include.exists ? "" : "\nNo tiddlywiki.info found there.");
+	return chip;
+}
+
+// ---------- includes overview ----------
+
+function showIncludesOverview() {
+	const groups = new Map(); // lower-cased resolved folder -> { resolved, exists, users: [] }
+	for (const wiki of state.wikis) {
+		for (const include of wiki.includes) {
+			const key = include.resolved.toLowerCase();
+			if (!groups.has(key)) {
+				groups.set(key, { resolved: include.resolved, exists: include.exists, users: [] });
+			}
+			groups.get(key).users.push({ wiki, include });
+		}
+	}
+	const list = $("#includes-overview");
+	list.replaceChildren();
+	if (!groups.size) {
+		const empty = document.createElement("li");
+		empty.textContent = "None of your wikis includes another folder.";
+		list.append(empty);
+	}
+	for (const group of [...groups.values()].sort((a, b) => folderName(a.resolved).localeCompare(folderName(b.resolved)))) {
+		const li = document.createElement("li");
+		const name = document.createElement("strong");
+		name.textContent = folderName(group.resolved);
+		const managed = state.wikis.find(w => w.path.toLowerCase() === group.resolved.toLowerCase());
+		const folder = document.createElement("div");
+		folder.className = "overview-path";
+		folder.textContent = group.resolved + (managed ? " · also in TW Desk as \"" + managed.name + "\"" : "") + (group.exists ? "" : " · missing (no tiddlywiki.info)");
+		const users = document.createElement("div");
+		users.className = "overview-wikis";
+		users.append("included by:");
+		for (const { wiki, include } of group.users) {
+			users.append(includeChip(wiki.name + (include.readOnly ? " (read-only)" : ""), { resolved: wiki.path, exists: true }));
+		}
+		li.append(name, folder, users);
+		list.append(li);
+	}
+	$("#includes-dialog").showModal();
+}
+
+$("#show-includes").addEventListener("click", showIncludesOverview);
+$("#close-includes").addEventListener("click", () => $("#includes-dialog").close());
 
 async function removeWiki(wiki) {
 	if (confirm("Remove \"" + wiki.name + "\" from TW Desk?\n\nThe wiki folder and its files are not deleted.")) {
@@ -163,10 +234,57 @@ async function openDialog(wiki) {
 	form.elements.path.value = wiki ? wiki.path : "";
 	form.elements.port.value = wiki ? wiki.port : await api.suggestPort();
 	form.elements.autostart.checked = wiki ? !!wiki.autostart : false;
+	// Includes are edited for existing wikis only; a new wiki gets its shared include via "Create new wiki"
+	dialogIncludes = wiki ? wiki.includes.map(i => ({ path: i.resolved, readOnly: i.readOnly, exists: i.exists })) : [];
+	$("#includes-field").hidden = !wiki;
+	renderIncludesEditor();
 	updateModeFields();
 	dialog.showModal();
 	form.elements.name.focus();
 }
+
+function renderIncludesEditor() {
+	const list = $("#includes-editor");
+	list.replaceChildren();
+	if (!dialogIncludes.length) {
+		const empty = document.createElement("li");
+		empty.className = "muted";
+		empty.textContent = "No included wikis.";
+		list.append(empty);
+	}
+	dialogIncludes.forEach((include, index) => {
+		const li = document.createElement("li");
+		const text = document.createElement("span");
+		text.className = "include-path" + (include.exists === false ? " error" : "");
+		text.textContent = include.path + (include.exists === false ? " (missing)" : "");
+		text.title = include.path;
+		const readOnly = document.createElement("label");
+		const checkbox = document.createElement("input");
+		checkbox.type = "checkbox";
+		checkbox.checked = include.readOnly;
+		checkbox.addEventListener("change", () => (include.readOnly = checkbox.checked));
+		readOnly.append(checkbox, " read-only");
+		const remove = document.createElement("button");
+		remove.type = "button";
+		remove.className = "ghost";
+		remove.textContent = "✕";
+		remove.title = "Remove this include";
+		remove.addEventListener("click", () => {
+			dialogIncludes.splice(index, 1);
+			renderIncludesEditor();
+		});
+		li.append(text, readOnly, remove);
+		list.append(li);
+	});
+}
+
+$("#add-include").addEventListener("click", () => run(async () => {
+	const folder = await api.pickFolder("Wiki folder to include");
+	if (folder && !dialogIncludes.some(i => i.path.toLowerCase() === folder.toLowerCase())) {
+		dialogIncludes.push({ path: folder, readOnly: false });
+		renderIncludesEditor();
+	}
+}));
 
 form.addEventListener("change", event => {
 	if (event.target.name === "mode") {
@@ -207,6 +325,9 @@ form.addEventListener("submit", async event => {
 			createNew: !editingId && mode() === "new",
 			sharedPath: form.elements.sharedPath.value.trim()
 		});
+		if (editingId) {
+			await api.saveIncludes(editingId, dialogIncludes.map(i => ({ path: i.path, readOnly: i.readOnly })));
+		}
 		dialog.close();
 	} catch (e) {
 		$("#form-error").textContent = cleanError(e);
@@ -238,3 +359,5 @@ function applyState(newState) {
 
 api.onState(applyState);
 api.getState().then(applyState);
+// Pick up changes made to tiddlywiki.info files outside TW Desk
+window.addEventListener("focus", () => api.getState().then(applyState));

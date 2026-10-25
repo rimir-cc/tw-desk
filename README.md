@@ -7,6 +7,7 @@ TiddlyWiki (currently 5.4.1) is bundled; each wiki runs as its own server on `12
 
 - **Add a wiki:** `+ Add wiki` → existing folder (contains `tiddlywiki.info`) or create a new one (optionally including a shared wiki such as `../_shared`).
 - **Start / Stop / Open / Browser / Log** per wiki; "Start when TW Desk starts" = autostart.
+- **Includes** (`includeWikis` in `tiddlywiki.info`): shown under each wiki; the `Includes` button lists which wikis include which folder. Change them in **Edit** (wiki must be stopped; only folders with a `tiddlywiki.info`).
 - Wiki list: `%APPDATA%\TW Desk\config.json`.
 - Only one server per wiki folder: don't open the same folder in TiddlyDesktop or Docker at the same time.
 

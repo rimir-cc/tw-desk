@@ -9,6 +9,7 @@ contextBridge.exposeInMainWorld("twDesk", {
 	pickFolder: title => ipcRenderer.invoke("pick-folder", title),
 	saveWiki: wiki => ipcRenderer.invoke("save-wiki", wiki),
 	removeWiki: id => ipcRenderer.invoke("remove-wiki", id),
+	saveIncludes: (id, entries) => ipcRenderer.invoke("save-includes", id, entries),
 	moveWiki: (id, delta) => ipcRenderer.invoke("move-wiki", id, delta),
 	startWiki: id => ipcRenderer.invoke("start-wiki", id),
 	stopWiki: id => ipcRenderer.invoke("stop-wiki", id),

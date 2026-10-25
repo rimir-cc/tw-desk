@@ -86,8 +86,68 @@ function snapshot() {
 		twVersion: TW_VERSION,
 		configPath: configPath(),
 		installDir: app.isPackaged ? path.dirname(process.execPath) : app.getAppPath(),
-		wikis: config.wikis.map(w => Object.assign({}, w, serverState(w.id), { url: wikiUrl(w) }))
+		wikis: config.wikis.map(w => Object.assign({}, w, serverState(w.id), { url: wikiUrl(w) }, readIncludes(w.path)))
 	};
+}
+
+// ---------- tiddlywiki.info: includeWikis ----------
+
+function infoPath(wikiPath) {
+	return path.join(wikiPath, "tiddlywiki.info");
+}
+
+// Returns { includes: [{ path, resolved, readOnly, exists }] } or { includes: [], infoError }
+function readIncludes(wikiPath) {
+	let info;
+	try {
+		info = JSON.parse(fs.readFileSync(infoPath(wikiPath), "utf8"));
+	} catch (e) {
+		return { includes: [], infoError: "Cannot read tiddlywiki.info: " + e.message };
+	}
+	const includes = (info.includeWikis || []).map(entry => {
+		const item = typeof entry === "string" ? { path: entry } : entry || {};
+		const resolved = path.resolve(wikiPath, item.path || "");
+		return {
+			path: item.path || "",
+			resolved,
+			// TiddlyWiki treats a missing "read-only" as writable
+			readOnly: !!item["read-only"],
+			exists: fs.existsSync(path.join(resolved, "tiddlywiki.info"))
+		};
+	});
+	return { includes };
+}
+
+function saveIncludes(id, entries) {
+	const wiki = findWiki(id);
+	const s = serverState(id).status;
+	if (s === "running" || s === "starting") {
+		throw new Error("Stop the wiki before changing its includes.");
+	}
+	const file = infoPath(wiki.path);
+	const info = JSON.parse(fs.readFileSync(file, "utf8"));
+	const includeWikis = entries.map(entry => {
+		const resolved = path.resolve(wiki.path, entry.path);
+		if (resolved === path.resolve(wiki.path)) {
+			throw new Error("A wiki cannot include itself.");
+		}
+		// TiddlyWiki fails to start if an included folder isn't a wiki
+		if (!fs.existsSync(infoPath(resolved))) {
+			throw new Error("Not a wiki folder (no tiddlywiki.info): " + resolved);
+		}
+		// Store paths relative to the wiki folder when possible, like TiddlyWiki's own examples
+		let stored = path.relative(wiki.path, resolved);
+		if (!stored || path.isAbsolute(stored)) {
+			stored = resolved;
+		}
+		return { path: stored.split(path.sep).join("/"), "read-only": !!entry.readOnly };
+	});
+	if (JSON.stringify(includeWikis) === JSON.stringify(info.includeWikis || [])) {
+		return;
+	}
+	info.includeWikis = includeWikis;
+	fs.writeFileSync(file, JSON.stringify(info, null, 4));
+	pushState();
 }
 
 function pushState() {
@@ -317,6 +377,8 @@ ipcMain.handle("save-wiki", async (event, input) => {
 	pushState();
 	return wiki.id;
 });
+
+ipcMain.handle("save-includes", (event, id, entries) => saveIncludes(id, entries));
 
 ipcMain.handle("remove-wiki", (event, id) => {
 	stopWiki(id);

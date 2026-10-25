@@ -11,6 +11,7 @@
 	<h1>TW Desk</h1>
 	<span id="tw-version" class="muted"></span>
 	<span class="spacer"></span>
+	<button id="show-includes" title="Which folders are included by which wikis">Includes</button>
 	<button id="add-wiki" class="primary">+ Add wiki</button>
 </header>
 
@@ -60,12 +61,26 @@
 			<input name="port" type="number" min="1024" max="65535" required>
 		</label>
 		<label class="inline"><input name="autostart" type="checkbox"> Start when TW Desk starts</label>
+		<div id="includes-field" hidden>
+			<div class="field-title">Included wikis <small class="muted">(includeWikis in tiddlywiki.info)</small></div>
+			<ul id="includes-editor"></ul>
+			<button type="button" id="add-include">+ Add include…</button>
+		</div>
 		<p id="form-error" class="error" hidden></p>
 		<div class="actions">
 			<button type="button" id="cancel-dialog">Cancel</button>
 			<button type="submit" class="primary" id="save-dialog">Save</button>
 		</div>
 	</form>
+</dialog>
+
+<dialog id="includes-dialog">
+	<h2>Included folders</h2>
+	<p class="muted">Folders listed in the wikis' includeWikis, and which wikis include them.</p>
+	<ul id="includes-overview"></ul>
+	<div class="actions">
+		<button type="button" id="close-includes">Close</button>
+	</div>
 </dialog>
 
 <script src="renderer.js"></script>

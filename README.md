@@ -40,3 +40,4 @@ Otherwise re-add the wikis in the app. Copy this source folder (without `node_mo
 
 - **Wiki won't start:** open its **Log**. "Port … already in use" → another program uses the port; pick another one via Edit.
 - **App doesn't appear:** check Task Manager for a leftover `TW Desk.exe`; only one instance can run.
+- **Update says "TW Desk kann nicht geschlossen werden" although it isn't running:** only happens when updating 0.1.5 or older (they contained files with paths over 260 characters that the old uninstaller can't move). Delete the install folder (shown in the app's footer) and run the installer again.

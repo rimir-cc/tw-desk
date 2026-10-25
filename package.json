@@ -1,7 +1,7 @@
 {
   "name": "tw-desk",
   "productName": "TW Desk",
-  "version": "0.1.4",
+  "version": "0.1.6",
   "description": "Small manager for local TiddlyWiki folder wikis",
   "main": "src/main.js",
   "private": true,
@@ -14,9 +14,6 @@
     "files": [
       "src/**/*",
       "package.json"
-    ],
-    "asarUnpack": [
-      "node_modules/tiddlywiki/**/*"
     ],
     "win": {
       "target": "nsis"

@@ -1,0 +1,70 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta http-equiv="Content-Security-Policy" content="default-src 'self'; script-src 'self'; style-src 'self'">
+<title>TW Desk</title>
+<link rel="stylesheet" href="styles.css">
+</head>
+<body>
+<header>
+	<h1>TW Desk</h1>
+	<span id="tw-version" class="muted"></span>
+	<span class="spacer"></span>
+	<button id="add-wiki" class="primary">+ Add wiki</button>
+</header>
+
+<main>
+	<ul id="wiki-list"></ul>
+	<p id="empty-hint" class="muted" hidden>No wikis yet. Use “+ Add wiki” to add an existing wiki folder or create a new one.</p>
+</main>
+
+<section id="log-panel" hidden>
+	<div class="log-header">
+		<strong id="log-title"></strong>
+		<span class="spacer"></span>
+		<button id="log-close" class="ghost" title="Close log">✕</button>
+	</div>
+	<pre id="log-output"></pre>
+</section>
+
+<footer class="muted">Config: <span id="config-path"></span></footer>
+
+<dialog id="wiki-dialog">
+	<form id="wiki-form" method="dialog">
+		<h2 id="dialog-title">Add wiki</h2>
+		<fieldset id="mode-fields">
+			<label><input type="radio" name="mode" value="existing" checked> Existing wiki folder</label>
+			<label><input type="radio" name="mode" value="new"> Create new wiki</label>
+		</fieldset>
+		<label>Name
+			<input name="name" required>
+		</label>
+		<label>Folder
+			<span class="row">
+				<input name="path" required>
+				<button type="button" id="pick-path">Browse…</button>
+			</span>
+			<small id="path-hint" class="muted"></small>
+		</label>
+		<label id="shared-field" hidden>Include shared wiki (optional)
+			<span class="row">
+				<input name="sharedPath" placeholder="e.g. C:\…\wikis\_shared">
+				<button type="button" id="pick-shared">Browse…</button>
+			</span>
+		</label>
+		<label>Port
+			<input name="port" type="number" min="1024" max="65535" required>
+		</label>
+		<label class="inline"><input name="autostart" type="checkbox"> Start when TW Desk starts</label>
+		<p id="form-error" class="error" hidden></p>
+		<div class="actions">
+			<button type="button" id="cancel-dialog">Cancel</button>
+			<button type="submit" class="primary" id="save-dialog">Save</button>
+		</div>
+	</form>
+</dialog>
+
+<script src="renderer.js"></script>
+</body>
+</html>

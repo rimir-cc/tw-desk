@@ -1,0 +1,131 @@
+:root {
+	color-scheme: light dark;
+	--bg: #f6f7f9;
+	--panel: #ffffff;
+	--text: #1d2330;
+	--muted: #6b7385;
+	--border: #dde1e8;
+	--accent: #3c6fd8;
+	--accent-text: #ffffff;
+	--running: #2e9d57;
+	--starting: #d99a1e;
+	--error: #d0453b;
+	--stopped: #a3a9b6;
+	--log-bg: #1e222a;
+	--log-text: #d7dbe3;
+}
+
+@media (prefers-color-scheme: dark) {
+	:root {
+		--bg: #16191f;
+		--panel: #1f232b;
+		--text: #e3e6ec;
+		--muted: #949bab;
+		--border: #343a46;
+		--accent: #5b8ef0;
+		--stopped: #5e6574;
+		--log-bg: #111318;
+	}
+}
+
+* { box-sizing: border-box; }
+[hidden] { display: none !important; }
+
+body {
+	margin: 0;
+	height: 100vh;
+	display: flex;
+	flex-direction: column;
+	font: 14px/1.4 "Segoe UI", system-ui, sans-serif;
+	background: var(--bg);
+	color: var(--text);
+}
+
+header, footer, .log-header, .row, .wiki, .wiki-actions, .actions {
+	display: flex;
+	align-items: center;
+	gap: 8px;
+}
+
+header { padding: 12px 16px; border-bottom: 1px solid var(--border); background: var(--panel); }
+header h1 { margin: 0; font-size: 18px; }
+footer { padding: 6px 16px; font-size: 12px; border-top: 1px solid var(--border); }
+.spacer { flex: 1; }
+.muted { color: var(--muted); }
+.error { color: var(--error); white-space: pre-wrap; }
+
+main { flex: 1; overflow: auto; padding: 12px 16px; }
+
+#wiki-list { list-style: none; margin: 0; padding: 0; display: flex; flex-direction: column; gap: 8px; }
+
+.wiki {
+	padding: 10px 12px;
+	background: var(--panel);
+	border: 1px solid var(--border);
+	border-radius: 8px;
+}
+.wiki.selected { border-color: var(--accent); }
+.wiki-info { flex: 1; min-width: 0; }
+.wiki-name { font-weight: 600; }
+.wiki-meta { font-size: 12px; color: var(--muted); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.wiki-error { font-size: 12px; color: var(--error); }
+.wiki-actions { flex-wrap: wrap; justify-content: flex-end; }
+
+.dot { width: 10px; height: 10px; border-radius: 50%; flex: none; background: var(--stopped); }
+.dot.running { background: var(--running); }
+.dot.starting { background: var(--starting); }
+.dot.error { background: var(--error); }
+
+button {
+	font: inherit;
+	padding: 4px 10px;
+	border-radius: 6px;
+	border: 1px solid var(--border);
+	background: var(--panel);
+	color: var(--text);
+	cursor: pointer;
+}
+button:hover:not(:disabled) { border-color: var(--accent); }
+button:disabled { opacity: 0.45; cursor: default; }
+button.primary { background: var(--accent); border-color: var(--accent); color: var(--accent-text); }
+button.ghost { border-color: transparent; background: transparent; }
+button.danger:hover:not(:disabled) { border-color: var(--error); color: var(--error); }
+
+#log-panel { height: 38vh; display: flex; flex-direction: column; border-top: 1px solid var(--border); background: var(--panel); }
+.log-header { padding: 6px 16px; }
+#log-output {
+	flex: 1;
+	margin: 0;
+	padding: 8px 16px;
+	overflow: auto;
+	background: var(--log-bg);
+	color: var(--log-text);
+	font: 12px/1.45 Consolas, "Cascadia Mono", monospace;
+	white-space: pre-wrap;
+	word-break: break-all;
+}
+
+dialog {
+	width: min(560px, 92vw);
+	border: 1px solid var(--border);
+	border-radius: 10px;
+	background: var(--panel);
+	color: var(--text);
+	padding: 20px;
+}
+dialog::backdrop { background: rgba(0, 0, 0, 0.35); }
+dialog h2 { margin: 0 0 12px; font-size: 16px; }
+form label { display: flex; flex-direction: column; gap: 4px; margin-bottom: 12px; }
+form label.inline { flex-direction: row; align-items: center; gap: 6px; }
+form fieldset { border: none; padding: 0; margin: 0 0 12px; display: flex; gap: 16px; }
+form fieldset label { flex-direction: row; align-items: center; gap: 6px; margin: 0; }
+.row input { flex: 1; }
+input:not([type=checkbox]):not([type=radio]) {
+	font: inherit;
+	padding: 5px 8px;
+	border: 1px solid var(--border);
+	border-radius: 6px;
+	background: var(--bg);
+	color: var(--text);
+}
+.actions { justify-content: flex-end; margin-top: 8px; }

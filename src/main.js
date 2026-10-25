@@ -1,0 +1,398 @@
+"use strict";
+
+const { app, BrowserWindow, ipcMain, dialog, shell, utilityProcess } = require("electron");
+const fs = require("fs");
+const net = require("net");
+const path = require("path");
+const crypto = require("crypto");
+
+const DEFAULT_BASE_PORT = 8090;
+const MAX_LOG_LINES = 500;
+
+// Each TiddlyWiki command runs in an Electron utility process (a Node.js child process managed by Electron),
+// so no separate Node install is needed.
+const TW_PROCESS = path.join(__dirname, "tw-process.js");
+const TW_VERSION = require("tiddlywiki/package.json").version;
+
+let managerWindow = null;
+let config = { basePort: DEFAULT_BASE_PORT, wikis: [] };
+const servers = new Map(); // wiki id -> { child, status, logs, error }
+const wikiWindows = new Map(); // wiki id -> BrowserWindow
+
+// ---------- config ----------
+
+function configPath() {
+	return path.join(app.getPath("userData"), "config.json");
+}
+
+function loadConfig() {
+	try {
+		config = Object.assign({ basePort: DEFAULT_BASE_PORT, wikis: [] }, JSON.parse(fs.readFileSync(configPath(), "utf8")));
+	} catch (e) {
+		if (e.code !== "ENOENT") {
+			dialog.showErrorBox("TW Desk", "Could not read " + configPath() + ":\n" + e.message);
+		}
+	}
+}
+
+function saveConfig() {
+	fs.mkdirSync(path.dirname(configPath()), { recursive: true });
+	fs.writeFileSync(configPath(), JSON.stringify(config, null, 2));
+}
+
+function findWiki(id) {
+	const wiki = config.wikis.find(w => w.id === id);
+	if (!wiki) {
+		throw new Error("Unknown wiki " + id);
+	}
+	return wiki;
+}
+
+function nextFreeConfigPort() {
+	const used = new Set(config.wikis.map(w => w.port));
+	let port = config.basePort || DEFAULT_BASE_PORT;
+	while (used.has(port)) {
+		port++;
+	}
+	return port;
+}
+
+function validateWiki(wiki, ignoreId) {
+	if (!wiki.name || !wiki.name.trim()) {
+		throw new Error("Name is required.");
+	}
+	if (!Number.isInteger(wiki.port) || wiki.port < 1024 || wiki.port > 65535) {
+		throw new Error("Port must be a number between 1024 and 65535.");
+	}
+	const clash = config.wikis.find(w => w.id !== ignoreId && w.port === wiki.port);
+	if (clash) {
+		throw new Error("Port " + wiki.port + " is already used by \"" + clash.name + "\".");
+	}
+	if (!fs.existsSync(path.join(wiki.path, "tiddlywiki.info"))) {
+		throw new Error("No tiddlywiki.info in " + wiki.path);
+	}
+}
+
+// ---------- state sent to the UI ----------
+
+function serverState(id) {
+	const s = servers.get(id);
+	return s ? { status: s.status, error: s.error } : { status: "stopped", error: null };
+}
+
+function snapshot() {
+	return {
+		twVersion: TW_VERSION,
+		configPath: configPath(),
+		wikis: config.wikis.map(w => Object.assign({}, w, serverState(w.id), { url: wikiUrl(w) }))
+	};
+}
+
+function pushState() {
+	if (managerWindow && !managerWindow.isDestroyed()) {
+		managerWindow.webContents.send("state", snapshot());
+	}
+}
+
+function appendLog(id, text) {
+	const s = servers.get(id);
+	if (!s) {
+		return;
+	}
+	const lines = text.split(/\r?\n/).filter(l => l.length);
+	s.logs.push(...lines);
+	if (s.logs.length > MAX_LOG_LINES) {
+		s.logs.splice(0, s.logs.length - MAX_LOG_LINES);
+	}
+	if (managerWindow && !managerWindow.isDestroyed()) {
+		managerWindow.webContents.send("log", { id, lines });
+	}
+}
+
+function wikiUrl(wiki) {
+	return "http://127.0.0.1:" + wiki.port + "/";
+}
+
+// ---------- servers ----------
+
+function runTiddlyWiki(args, serviceName) {
+	return utilityProcess.fork(TW_PROCESS, [], {
+		env: Object.assign({}, process.env, { TW_DESK_ARGS: JSON.stringify(args) }),
+		stdio: "pipe",
+		execArgv: ["--no-deprecation"],
+		serviceName
+	});
+}
+
+function portIsFree(port) {
+	return new Promise(resolve => {
+		const probe = net.createServer();
+		probe.once("error", () => resolve(false));
+		probe.once("listening", () => probe.close(() => resolve(true)));
+		probe.listen(port, "127.0.0.1");
+	});
+}
+
+async function startWiki(id) {
+	const wiki = findWiki(id);
+	const existing = servers.get(id);
+	if (existing && (existing.status === "running" || existing.status === "starting")) {
+		return;
+	}
+	const state = { child: null, status: "starting", error: null, logs: existing ? existing.logs : [] };
+	servers.set(id, state);
+	pushState();
+	if (!(await portIsFree(wiki.port))) {
+		state.status = "error";
+		state.error = "Port " + wiki.port + " is already in use by another program.";
+		appendLog(id, state.error);
+		pushState();
+		return;
+	}
+	appendLog(id, "Starting TiddlyWiki " + TW_VERSION + ": " + wiki.path + " on port " + wiki.port);
+	const child = runTiddlyWiki([wiki.path, "--listen", "host=127.0.0.1", "port=" + wiki.port], "TiddlyWiki " + wiki.name);
+	state.child = child;
+	const onOutput = data => {
+		const text = data.toString();
+		if (state.status === "starting" && text.includes("Serving on")) {
+			state.status = "running";
+			pushState();
+		}
+		appendLog(id, text);
+	};
+	child.stdout.on("data", onOutput);
+	child.stderr.on("data", onOutput);
+	child.on("error", (type, location) => {
+		appendLog(id, "Error: " + type + (location ? " at " + location : ""));
+	});
+	child.on("exit", code => {
+		state.child = null;
+		if (state.stopping || code === 0) {
+			state.status = "stopped";
+		} else {
+			state.status = "error";
+			state.error = "Server exited with code " + code + ". See log.";
+		}
+		state.stopping = false;
+		appendLog(id, "Server stopped" + (code !== null ? " (exit code " + code + ")" : ""));
+		const win = wikiWindows.get(id);
+		if (win && !win.isDestroyed()) {
+			win.close();
+		}
+		pushState();
+	});
+}
+
+function stopWiki(id) {
+	const state = servers.get(id);
+	if (state && state.child) {
+		state.stopping = true;
+		state.child.kill();
+	}
+}
+
+function waitForRunning(id, timeoutMs) {
+	return new Promise((resolve, reject) => {
+		const started = Date.now();
+		const check = () => {
+			const s = serverState(id);
+			if (s.status === "running") {
+				resolve();
+			} else if (s.status === "error" || s.status === "stopped") {
+				reject(new Error(s.error || "Server is not running."));
+			} else if (Date.now() - started > timeoutMs) {
+				reject(new Error("Server did not start within " + timeoutMs / 1000 + " seconds."));
+			} else {
+				setTimeout(check, 200);
+			}
+		};
+		check();
+	});
+}
+
+async function openWiki(id, external) {
+	const wiki = findWiki(id);
+	if (serverState(id).status !== "running") {
+		await startWiki(id);
+		await waitForRunning(id, 60000);
+	}
+	if (external) {
+		await shell.openExternal(wikiUrl(wiki));
+		return;
+	}
+	const existing = wikiWindows.get(id);
+	if (existing && !existing.isDestroyed()) {
+		existing.focus();
+		return;
+	}
+	const win = new BrowserWindow({
+		width: 1280,
+		height: 900,
+		title: wiki.name,
+		autoHideMenuBar: true,
+		webPreferences: { contextIsolation: true, nodeIntegration: false, sandbox: true }
+	});
+	// Links to other sites open in the default browser; links within the wiki stay in the window.
+	win.webContents.setWindowOpenHandler(({ url }) => {
+		if (!url.startsWith(wikiUrl(wiki))) {
+			shell.openExternal(url);
+			return { action: "deny" };
+		}
+		return { action: "allow" };
+	});
+	win.webContents.on("will-navigate", (event, url) => {
+		if (!url.startsWith(wikiUrl(wiki))) {
+			event.preventDefault();
+			shell.openExternal(url);
+		}
+	});
+	win.on("page-title-updated", (event, title) => {
+		event.preventDefault();
+		win.setTitle(wiki.name + " — " + title);
+	});
+	win.on("closed", () => wikiWindows.delete(id));
+	wikiWindows.set(id, win);
+	win.loadURL(wikiUrl(wiki));
+}
+
+// ---------- creating wikis ----------
+
+async function initWiki(folder, sharedFolder) {
+	fs.mkdirSync(folder, { recursive: true });
+	if (fs.readdirSync(folder).length) {
+		throw new Error("The folder for a new wiki must be empty: " + folder);
+	}
+	const child = runTiddlyWiki([folder, "--init", "server"], "TiddlyWiki init");
+	let output = "";
+	child.stdout.on("data", data => (output += data));
+	child.stderr.on("data", data => (output += data));
+	const code = await new Promise(resolve => child.once("exit", resolve));
+	if (code !== 0 || !fs.existsSync(path.join(folder, "tiddlywiki.info"))) {
+		throw new Error("tiddlywiki --init failed (exit code " + code + "):\n" + output);
+	}
+	fs.mkdirSync(path.join(folder, "tiddlers"), { recursive: true });
+	if (sharedFolder) {
+		const infoPath = path.join(folder, "tiddlywiki.info");
+		const info = JSON.parse(fs.readFileSync(infoPath, "utf8"));
+		const relative = path.relative(folder, sharedFolder).split(path.sep).join("/");
+		info.includeWikis = [{ path: relative, "read-only": false }];
+		fs.writeFileSync(infoPath, JSON.stringify(info, null, 4));
+	}
+}
+
+// ---------- IPC ----------
+
+ipcMain.handle("get-state", () => snapshot());
+
+ipcMain.handle("get-logs", (event, id) => (servers.get(id) ? servers.get(id).logs : []));
+
+ipcMain.handle("suggest-port", () => nextFreeConfigPort());
+
+ipcMain.handle("pick-folder", async (event, title) => {
+	const result = await dialog.showOpenDialog(managerWindow, { title, properties: ["openDirectory", "createDirectory"] });
+	return result.canceled ? null : result.filePaths[0];
+});
+
+ipcMain.handle("save-wiki", async (event, input) => {
+	const wiki = {
+		id: input.id || crypto.randomUUID(),
+		name: (input.name || "").trim(),
+		path: path.resolve(input.path || ""),
+		port: Number(input.port),
+		autostart: !!input.autostart
+	};
+	if (!input.id && input.createNew) {
+		await initWiki(wiki.path, input.sharedPath ? path.resolve(input.sharedPath) : null);
+	}
+	validateWiki(wiki, input.id);
+	const index = config.wikis.findIndex(w => w.id === wiki.id);
+	if (index === -1) {
+		config.wikis.push(wiki);
+	} else {
+		config.wikis[index] = wiki;
+	}
+	saveConfig();
+	pushState();
+	return wiki.id;
+});
+
+ipcMain.handle("remove-wiki", (event, id) => {
+	stopWiki(id);
+	config.wikis = config.wikis.filter(w => w.id !== id);
+	saveConfig();
+	pushState();
+});
+
+ipcMain.handle("move-wiki", (event, id, delta) => {
+	const index = config.wikis.findIndex(w => w.id === id);
+	const target = index + delta;
+	if (index !== -1 && target >= 0 && target < config.wikis.length) {
+		const [wiki] = config.wikis.splice(index, 1);
+		config.wikis.splice(target, 0, wiki);
+		saveConfig();
+		pushState();
+	}
+});
+
+ipcMain.handle("start-wiki", (event, id) => startWiki(id));
+ipcMain.handle("stop-wiki", (event, id) => stopWiki(id));
+ipcMain.handle("open-wiki", (event, id, external) => openWiki(id, external));
+ipcMain.handle("show-folder", (event, id) => shell.openPath(findWiki(id).path));
+
+// ---------- app lifecycle ----------
+
+function createManagerWindow() {
+	managerWindow = new BrowserWindow({
+		width: 980,
+		height: 680,
+		minWidth: 640,
+		minHeight: 400,
+		title: "TW Desk",
+		autoHideMenuBar: true,
+		webPreferences: {
+			preload: path.join(__dirname, "preload.js"),
+			contextIsolation: true,
+			nodeIntegration: false,
+			sandbox: true
+		}
+	});
+	managerWindow.loadFile(path.join(__dirname, "index.html"));
+	managerWindow.on("closed", () => {
+		managerWindow = null;
+		app.quit();
+	});
+}
+
+// Lets a second, separate setup (e.g. for testing) keep its own config.json.
+if (process.env.TW_DESK_USER_DATA) {
+	app.setPath("userData", path.resolve(process.env.TW_DESK_USER_DATA));
+}
+
+if (!app.requestSingleInstanceLock()) {
+	app.quit();
+} else {
+	app.on("second-instance", () => {
+		if (managerWindow) {
+			if (managerWindow.isMinimized()) {
+				managerWindow.restore();
+			}
+			managerWindow.focus();
+		}
+	});
+
+	app.whenReady().then(() => {
+		loadConfig();
+		createManagerWindow();
+		for (const wiki of config.wikis) {
+			if (wiki.autostart) {
+				startWiki(wiki.id);
+			}
+		}
+	});
+
+	app.on("before-quit", () => {
+		for (const id of servers.keys()) {
+			stopWiki(id);
+		}
+	});
+}

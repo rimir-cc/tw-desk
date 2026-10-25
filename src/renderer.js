@@ -218,12 +218,21 @@ form.addEventListener("submit", async event => {
 
 $("#add-wiki").addEventListener("click", () => run(() => openDialog(null)));
 
+for (const copyButton of document.querySelectorAll("button.copy")) {
+	copyButton.addEventListener("click", () => run(async () => {
+		await api.copyText($("#" + copyButton.dataset.copy).textContent);
+		copyButton.textContent = "Copied";
+		setTimeout(() => (copyButton.textContent = "Copy"), 1500);
+	}));
+}
+
 // ---------- start ----------
 
 function applyState(newState) {
 	state = newState;
 	$("#tw-version").textContent = "TiddlyWiki " + state.twVersion;
 	$("#config-path").textContent = state.configPath;
+	$("#install-dir").textContent = state.installDir;
 	render();
 }
 

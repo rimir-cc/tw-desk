@@ -1,6 +1,6 @@
 "use strict";
 
-const { app, BrowserWindow, ipcMain, dialog, shell, utilityProcess } = require("electron");
+const { app, BrowserWindow, ipcMain, dialog, shell, utilityProcess, clipboard } = require("electron");
 const fs = require("fs");
 const net = require("net");
 const path = require("path");
@@ -84,6 +84,7 @@ function snapshot() {
 	return {
 		twVersion: TW_VERSION,
 		configPath: configPath(),
+		installDir: app.isPackaged ? path.dirname(process.execPath) : app.getAppPath(),
 		wikis: config.wikis.map(w => Object.assign({}, w, serverState(w.id), { url: wikiUrl(w) }))
 	};
 }
@@ -338,6 +339,7 @@ ipcMain.handle("start-wiki", (event, id) => startWiki(id));
 ipcMain.handle("stop-wiki", (event, id) => stopWiki(id));
 ipcMain.handle("open-wiki", (event, id, external) => openWiki(id, external));
 ipcMain.handle("show-folder", (event, id) => shell.openPath(findWiki(id).path));
+ipcMain.handle("copy-text", (event, text) => clipboard.writeText(String(text)));
 
 // ---------- app lifecycle ----------
 

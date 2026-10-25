@@ -14,6 +14,7 @@ contextBridge.exposeInMainWorld("twDesk", {
 	stopWiki: id => ipcRenderer.invoke("stop-wiki", id),
 	openWiki: (id, external) => ipcRenderer.invoke("open-wiki", id, external),
 	showFolder: id => ipcRenderer.invoke("show-folder", id),
+	copyText: text => ipcRenderer.invoke("copy-text", text),
 	onState: callback => ipcRenderer.on("state", (event, state) => callback(state)),
 	onLog: callback => ipcRenderer.on("log", (event, entry) => callback(entry))
 });

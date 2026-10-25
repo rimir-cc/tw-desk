@@ -18,7 +18,7 @@ npm start            # run from source
 npm run dist         # build dist\TW-Desk-Setup-<version>.exe
 ```
 
-The installer is per-user (no admin rights) and updates an existing installation in place; the wiki list is kept.
+The installer is per-user (no admin rights), installs to `%LOCALAPPDATA%\Programs\tw-desk` by default (shown and changeable in the installer, and shown with a Copy button in the app's footer) and updates an existing installation in place; the wiki list is kept.
 Only the `Setup-*.exe` is needed for installing; the `.blockmap` file can be ignored.
 
 ## Update TiddlyWiki

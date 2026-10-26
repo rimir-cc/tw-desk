@@ -184,6 +184,7 @@ form label { display: flex; flex-direction: column; gap: 4px; margin-bottom: 12p
 form label.inline { flex-direction: row; align-items: center; gap: 6px; }
 form fieldset { border: none; padding: 0; margin: 0 0 12px; display: flex; gap: 16px; }
 form fieldset label { flex-direction: row; align-items: center; gap: 6px; margin: 0; }
+form fieldset.stacked { flex-direction: column; gap: 6px; }
 .row input { flex: 1; }
 input:not([type=checkbox]):not([type=radio]) {
 	font: inherit;

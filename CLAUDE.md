@@ -52,6 +52,10 @@ folders** – use copies (see Testing).
     where `<name>` = title without `$:/plugins/` and `/` (and `:<>"|?*`) replaced by `_`.
   - Fetched with Electron `net.fetch` (uses system proxy settings).
 - Writing `tiddlywiki.info` (includes, plugin lists) re-serializes it with 4-space JSON; skipped if unchanged.
+- **Copying a wiki** (`copyWikiFolder`): file copy, skipping `.git`, `output`, `$__StoryList.tid`, `$__HistoryList.json`;
+  "config" mode keeps only tiddler files whose title (from `.meta` / `.tid` header / all titles of a `.json`) starts
+  with `$:/` and drops `files/`. `includeWikis` paths are re-relativized to the new location. Copying into the source
+  folder is refused. A new repo is initialized only if the target isn't already inside one.
 - **Ports are automatic** (since 0.2.3): `config.basePort` + per wiki optional `fixedPort` and remembered
   `lastPort`. On start: fixed port, else `lastPort` if free, else the next free port from `basePort` – skipping other
   wikis' fixed and active ports and, if possible, their `lastPort`s (keeps URLs stable). Port choice is serialized

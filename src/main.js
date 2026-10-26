@@ -686,7 +686,88 @@ async function convertHtmlWiki(htmlFile, folder) {
 	await runTiddlyWikiCommand(["--load", htmlFile, "--savewikifolder", folder, HTML_SKIP_FILTER, "explodePlugins=no"], "TiddlyWiki convert");
 }
 
-// Creates a new wiki folder (empty, or converted from a single-file HTML wiki) and adds it to the list
+// State, build output and version control of a wiki folder are not copied
+const COPY_SKIP = new Set([".git", "output", "$__StoryList.tid", "$__HistoryList.json", "$__HistoryList.json.meta"]);
+
+function headerTitle(text) {
+	for (const line of text.split(/\r?\n/)) {
+		if (!line.trim()) {
+			break;
+		}
+		const match = /^title:\s*(.*)$/.exec(line);
+		if (match) {
+			return match[1].trim();
+		}
+	}
+	return null;
+}
+
+// Whether a file in tiddlers/ holds system tiddlers ($:/…); used for "only configuration" copies
+function isSystemTiddlerFile(file) {
+	const fallback = path.basename(file).startsWith("$__");
+	try {
+		if (fs.existsSync(file + ".meta")) {
+			const title = headerTitle(fs.readFileSync(file + ".meta", "utf8"));
+			return title ? title.startsWith("$:/") : fallback;
+		}
+		if (file.endsWith(".tid")) {
+			const title = headerTitle(fs.readFileSync(file, "utf8"));
+			return title ? title.startsWith("$:/") : fallback;
+		}
+		if (file.endsWith(".json")) {
+			const data = JSON.parse(fs.readFileSync(file, "utf8"));
+			const list = Array.isArray(data) ? data : [data];
+			return list.length > 0 && list.every(t => t && typeof t.title === "string" && t.title.startsWith("$:/"));
+		}
+	} catch (e) {
+		return false;
+	}
+	return fallback;
+}
+
+// Copies a wiki folder; "config" copies everything except content: only system tiddlers, no files/ folder
+function copyWikiFolder(source, target, mode) {
+	const configOnly = mode === "config";
+	const tiddlersDir = path.join(source, "tiddlers");
+	fs.cpSync(source, target, {
+		recursive: true,
+		filter: file => {
+			const name = path.basename(file);
+			if (COPY_SKIP.has(name)) {
+				return false;
+			}
+			if (!configOnly || file === source) {
+				return true;
+			}
+			const relative = path.relative(source, file);
+			if (relative === "files" || relative.startsWith("files" + path.sep)) {
+				return false;
+			}
+			if (file === tiddlersDir || !relative.startsWith("tiddlers" + path.sep) || fs.statSync(file).isDirectory()) {
+				return true;
+			}
+			// A .meta file goes with the file it describes
+			return isSystemTiddlerFile(name.endsWith(".meta") ? file.slice(0, -5) : file);
+		}
+	});
+	// Keep included folders pointing to the same place when the copy lives elsewhere
+	const info = JSON.parse(fs.readFileSync(infoPath(target), "utf8"));
+	if (Array.isArray(info.includeWikis)) {
+		info.includeWikis = info.includeWikis.map(entry => {
+			const item = typeof entry === "string" ? { path: entry } : Object.assign({}, entry);
+			const resolved = path.resolve(source, item.path || "");
+			let relative = path.relative(target, resolved);
+			if (!relative || path.isAbsolute(relative)) {
+				relative = resolved;
+			}
+			item.path = relative.split(path.sep).join("/");
+			return typeof entry === "string" ? item.path : item;
+		});
+		fs.writeFileSync(infoPath(target), JSON.stringify(info, null, 4));
+	}
+}
+
+// Creates a new wiki folder (empty, converted from a single-file HTML wiki, or copied from another wiki) and adds it to the list
 async function createWiki(input) {
 	const folderName = (input.folderName || "").trim();
 	if (!folderName || /[\\/:*?"<>|]/.test(folderName) || /^\.+$/.test(folderName)) {
@@ -700,6 +781,13 @@ async function createWiki(input) {
 		throw new Error("HTML file not found: " + htmlFile);
 	}
 	const folder = path.join(path.resolve(input.parent), folderName);
+	const source = input.copyFrom ? findWiki(input.copyFrom) : null;
+	if (source) {
+		const relative = path.relative(path.resolve(source.path), folder);
+		if (!relative || (!relative.startsWith("..") && !path.isAbsolute(relative))) {
+			throw new Error("The copy can't be created inside the wiki it copies.");
+		}
+	}
 	const wiki = wikiFromInput(Object.assign({}, input, { id: null, path: folder }));
 	validateSettings(wiki, null);
 	const existed = fs.existsSync(folder);
@@ -709,6 +797,8 @@ async function createWiki(input) {
 	try {
 		if (htmlFile) {
 			await convertHtmlWiki(htmlFile, folder);
+		} else if (source) {
+			copyWikiFolder(path.resolve(source.path), folder, input.copyMode);
 		} else {
 			fs.mkdirSync(folder, { recursive: true });
 			await runTiddlyWikiCommand([folder, "--init", "server"], "TiddlyWiki init");
@@ -748,6 +838,16 @@ async function createWiki(input) {
 	config.wikis.push(wiki);
 	saveConfig();
 	pushState();
+	// The wiki exists either way; without a repository its git chip offers to create one
+	if (input.gitInit && gitState.version) {
+		try {
+			if (!(await git.repoRoot(folder))) {
+				await git.init(folder);
+			}
+		} catch (e) {
+			console.error("git init of " + folder + " failed:", e.message);
+		}
+	}
 	checkGit({ fetch: false });
 	return wiki.id;
 }

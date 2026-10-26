@@ -94,6 +94,16 @@
 				Plugins from the official library are referenced by name, so the wiki uses the versions bundled with
 				<span class="tw-version-name"></span>. Other plugins are kept inside the wiki; you can move them to the store in Plugins.</p>
 		</section>
+		<section data-step="copy">
+			<p class="small">Copy of <strong id="copy-source-name"></strong> <span id="copy-source-path" class="muted"></span></p>
+			<fieldset class="stacked">
+				<label class="inline"><input type="radio" name="copyMode" value="all" checked> Everything – tiddlers, plugins, includes</label>
+				<label class="inline"><input type="radio" name="copyMode" value="config"> Only the configuration – system tiddlers ($:/…), plugins and includes, no content</label>
+			</fieldset>
+			<label class="inline" id="copy-git-field"><input name="gitInit" type="checkbox" checked> Start a new git repository for the copy</label>
+			<p class="muted small">The original's git history and remote are not copied, so the copy can't push into the original's repository.
+				Included folders (e.g. _shared) are not copied – the copy includes the same folders.</p>
+		</section>
 		<section data-step="location">
 			<label>Create in
 				<span class="row">
@@ -117,7 +127,7 @@
 			<label id="create-group-field">Group
 				<select name="group"></select>
 			</label>
-			<label>Include shared wiki (optional)
+			<label id="create-shared-field">Include shared wiki (optional)
 				<span class="row">
 					<input name="sharedPath" placeholder="e.g. C:\…\wikis\_shared">
 					<button type="button" id="pick-create-shared">Browse…</button>

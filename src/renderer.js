@@ -182,6 +182,7 @@ function wikiItem(wiki, index, count) {
 		button("Browser", () => api.openWiki(wiki.id, true), { title: wiki.url ? "Open " + wiki.url + " in the default browser" : "Open in the default browser (starts the server if needed)" }),
 		button("Folder", () => api.showFolder(wiki.id), { title: "Show the wiki folder in " + (FILE_MANAGER[state.platform] || "the file manager") }),
 		button("Log", () => showPanel(wiki.id, "log")),
+		button("Copy…", () => openCreateWizard("copy", wiki), { title: "Create a new wiki as a copy of this one" }),
 		button("Edit", () => openDialog(wiki), { disabled: running || busy, title: running || busy ? "Stop the wiki to edit it" : "Edit" }),
 		button("▲", () => api.moveWiki(wiki.id, -1), { disabled: index === 0, className: "ghost", title: "Move up" }),
 		button("▼", () => api.moveWiki(wiki.id, 1), { disabled: index === count - 1, className: "ghost", title: "Move down" }),
@@ -481,12 +482,17 @@ form.addEventListener("submit", async event => {
 
 $("#add-wiki").addEventListener("click", () => run(() => openDialog(null)));
 
-// ---------- create wizard (empty wiki / load from HTML) ----------
+// ---------- create wizard (empty wiki / load from HTML / copy of a wiki) ----------
 
 const createForm = $("#create-form");
 const createDialog = $("#create-dialog");
-const CREATE_STEPS = { source: "HTML file", location: "Location", settings: "Settings" };
-const wizard = { steps: [], index: 0, nameTouched: false };
+const CREATE_STEPS = { source: "HTML file", copy: "What to copy", location: "Location", settings: "Settings" };
+const WIZARD_MODES = {
+	empty: { title: "New empty wiki", steps: ["location", "settings"], working: "Creating…" },
+	html: { title: "Load wiki from HTML", steps: ["source", "location", "settings"], working: "Converting…" },
+	copy: { title: "Copy wiki", steps: ["copy", "location", "settings"], working: "Copying…" }
+};
+const wizard = { mode: "empty", source: null, steps: [], index: 0, nameTouched: false };
 
 function groupOptions(select, selected) {
 	select.replaceChildren(new Option("— none —", ""), ...state.groups.map(g => new Option(g.name, g.id)));
@@ -502,12 +508,15 @@ function parentOf(file) {
 	return file.replace(/[\\/][^\\/]*$/, "");
 }
 
-async function openCreateWizard(fromHtml) {
+// mode: "empty", "html" or "copy" (source: the wiki to copy)
+async function openCreateWizard(mode, source) {
 	createForm.reset();
-	wizard.steps = fromHtml ? ["source", "location", "settings"] : ["location", "settings"];
+	wizard.mode = mode;
+	wizard.source = source || null;
+	wizard.steps = WIZARD_MODES[mode].steps;
 	wizard.index = 0;
 	wizard.nameTouched = false;
-	$("#create-title").textContent = fromHtml ? "Load wiki from HTML" : "New empty wiki";
+	$("#create-title").textContent = WIZARD_MODES[mode].title;
 	for (const element of document.querySelectorAll(".tw-version-name")) {
 		element.textContent = "TiddlyWiki " + state.twVersion;
 	}
@@ -516,6 +525,18 @@ async function openCreateWizard(fromHtml) {
 	createForm.querySelector(".port-hint").textContent = portHint();
 	groupOptions(createForm.elements.group, "");
 	$("#create-group-field").hidden = !state.groups.length;
+	// A copy keeps the original's includes
+	$("#create-shared-field").hidden = mode === "copy";
+	if (source) {
+		$("#copy-source-name").textContent = source.name;
+		$("#copy-source-path").textContent = source.path;
+		$("#copy-git-field").hidden = !(state.git && state.git.available);
+		createForm.elements.parent.value = parentOf(source.path);
+		createForm.elements.group.value = source.group || "";
+		setFolderSuggestion(uniqueFolderName(folderName(source.path) + "-copy"));
+		createForm.elements.name.value = source.name + " (copy)";
+		wizard.nameTouched = true;
+	}
 	showCreateStep();
 	createDialog.showModal();
 }
@@ -569,6 +590,17 @@ function checkCreateStep() {
 		return "Enter a name.";
 	}
 	return null;
+}
+
+// "orga-copy", or "orga-copy-2" … if a wiki in TW Desk already uses that folder name next to it
+function uniqueFolderName(base) {
+	const parent = pathKey(createForm.elements.parent.value.trim());
+	const taken = new Set(state.wikis.filter(w => pathKey(parentOf(w.path)) === parent).map(w => pathKey(folderName(w.path))));
+	let name = base;
+	for (let n = 2; taken.has(pathKey(name)); n++) {
+		name = base + "-" + n;
+	}
+	return name;
 }
 
 function setFolderSuggestion(name) {
@@ -635,17 +667,20 @@ createForm.addEventListener("submit", async event => {
 	const next = $("#create-next");
 	const back = $("#create-back");
 	next.disabled = back.disabled = true;
-	next.textContent = wizard.steps[0] === "source" ? "Converting…" : "Creating…";
+	next.textContent = WIZARD_MODES[wizard.mode].working;
 	try {
 		const value = name => createForm.elements[name].value.trim();
 		const id = await api.createWiki({
-			htmlFile: wizard.steps[0] === "source" ? value("htmlFile") : null,
+			htmlFile: wizard.mode === "html" ? value("htmlFile") : null,
+			copyFrom: wizard.mode === "copy" ? wizard.source.id : null,
+			copyMode: createForm.elements.copyMode.value,
+			gitInit: wizard.mode === "copy" && createForm.elements.gitInit.checked,
 			parent: value("parent"),
 			folderName: value("folderName"),
 			name: value("name"),
 			fixedPort: value("fixedPort") || null,
 			group: value("group") || null,
-			sharedPath: value("sharedPath"),
+			sharedPath: wizard.mode === "copy" ? "" : value("sharedPath"),
 			autostart: createForm.elements.autostart.checked
 		});
 		createDialog.close();
@@ -661,8 +696,8 @@ createForm.addEventListener("submit", async event => {
 	}
 });
 
-$("#new-empty-wiki").addEventListener("click", () => run(() => openCreateWizard(false)));
-$("#new-html-wiki").addEventListener("click", () => run(() => openCreateWizard(true)));
+$("#new-empty-wiki").addEventListener("click", () => run(() => openCreateWizard("empty")));
+$("#new-html-wiki").addEventListener("click", () => run(() => openCreateWizard("html")));
 
 for (const copyButton of document.querySelectorAll("button.copy")) {
 	copyButton.addEventListener("click", () => run(async () => {

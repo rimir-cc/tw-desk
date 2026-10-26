@@ -14,15 +14,12 @@
 	<button id="show-includes" title="Which folders are included by which wikis">Includes</button>
 	<button id="show-plugins" title="Shared plugin store, libraries and the plugins of each wiki">Plugins</button>
 	<button id="show-settings" title="Start port for automatic ports">Settings</button>
-	<button id="add-group" title="Add a group to sort wikis into">+ Add group</button>
-	<button id="new-empty-wiki" title="Create a new, empty wiki folder">+ Empty wiki</button>
-	<button id="new-html-wiki" title="Convert a single-file TiddlyWiki (.html) into a wiki folder">+ Load from HTML</button>
-	<button id="add-wiki" class="primary" title="Add an existing wiki folder">+ Add wiki</button>
+	<button id="new-menu" class="primary" title="New wiki, existing wiki folder or group">+ New ▾</button>
 </header>
 
 <main>
 	<ul id="wiki-list"></ul>
-	<p id="empty-hint" class="muted" hidden>No wikis yet. Use “+ Add wiki” to add an existing wiki folder, “+ Empty wiki” to create a new one, or “+ Load from HTML” to convert a single-file wiki.</p>
+	<p id="empty-hint" class="muted" hidden>No wikis yet. Use “+ New” to create an empty wiki, convert a single-file wiki (.html) or add an existing wiki folder.</p>
 </main>
 
 <section id="log-panel" hidden>
@@ -228,6 +225,7 @@
 	<section id="tab-libraries" class="tab-panel"></section>
 </dialog>
 
+<script src="menu.js"></script>
 <script src="renderer.js"></script>
 <script src="plugins-ui.js"></script>
 <script src="git-ui.js"></script>

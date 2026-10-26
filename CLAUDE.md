@@ -116,8 +116,11 @@ rules everywhere, so wikis stay usable on Windows. The manager window quits the 
 
 ## State (as of 2026-10-26)
 
-- Version 0.2.0 built; it is the first update from the short-path layout (first real test that updates
-  work without deleting the install folder).
+- Version 0.2.8 committed (groups, update check per library, create/copy/delete wizards, automatic ports, git,
+  Linux/macOS build targets, row menus and drag & drop). Builds are made by the user on Windows; this sandbox
+  can't install Electron (no npm registry access). 0.2.0 was the first update from the short-path layout.
 - The user's plugins are still stored as tiddlers inside `_shared` (relink*, CPL-Repo, rimir/*,
   sq/editor-autolist); moving them to the store is the user's step in the Plugins window.
-- Open questions: keep or remove the ▲/▼ reorder buttons (added unasked); repository has no remote yet.
+- Wiki rows show Start/Stop, Open and a ⋯ menu (`src/menu.js`, also on right-click); reordering via the menu and
+  drag & drop (`place-wiki`). The list doesn't re-render during a drag (`renderPending`).
+- Open question: the repository has no remote yet.

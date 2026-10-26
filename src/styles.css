@@ -156,6 +156,19 @@ button.danger:hover:not(:disabled) { border-color: var(--error); color: var(--er
 .git-files { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .git-actions { display: flex; gap: 6px; flex-wrap: wrap; margin-top: 4px; }
 .log-header .tab { padding: 1px 10px; font-size: 12px; }
+.menu { position: fixed; z-index: 10; min-width: 190px; padding: 4px; display: flex; flex-direction: column; background: var(--panel); border: 1px solid var(--border); border-radius: 8px; box-shadow: 0 6px 20px rgba(0, 0, 0, 0.18); }
+.menu button { border: none; background: transparent; text-align: left; padding: 5px 10px; border-radius: 5px; }
+.menu button:hover:not(:disabled), .menu button:focus-visible { background: var(--accent); color: var(--accent-text); outline: none; }
+.menu-separator { height: 1px; margin: 4px 6px; background: var(--border); }
+.wiki-actions button.more { font-size: 16px; line-height: 1; padding: 3px 8px; }
+.wiki[draggable=true] { cursor: grab; }
+.wiki[draggable=true] button { cursor: pointer; }
+body.dragging-wiki .wiki { cursor: grabbing; }
+.wiki.drop-before { box-shadow: 0 -3px 0 var(--accent); }
+.wiki.drop-after { box-shadow: 0 3px 0 var(--accent); }
+.group-header.drop-into, .group-empty.drop-into { outline: 2px dashed var(--accent); outline-offset: 2px; border-radius: 6px; }
+.group-header.drop-only { display: none; }
+body.dragging-wiki .group-header.drop-only { display: flex; }
 #log-panel { height: 38vh; display: flex; flex-direction: column; border-top: 1px solid var(--border); background: var(--panel); }
 .log-header { padding: 6px 16px; }
 #log-output {

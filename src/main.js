@@ -1140,6 +1140,39 @@ ipcMain.handle("move-wiki", (event, id, delta) => {
 	}
 });
 
+// Drag and drop: puts the wiki into group (null: ungrouped) before beforeId, or at the end of the group
+ipcMain.handle("place-wiki", (event, id, group, beforeId) => {
+	const index = config.wikis.findIndex(w => w.id === id);
+	if (index === -1) {
+		throw new Error("Unknown wiki " + id);
+	}
+	if (group && !config.groups.some(g => g.id === group)) {
+		throw new Error("Unknown group " + group);
+	}
+	if (beforeId === id) {
+		return;
+	}
+	const [wiki] = config.wikis.splice(index, 1);
+	if (group) {
+		wiki.group = group;
+	} else {
+		delete wiki.group;
+	}
+	let target = beforeId ? config.wikis.findIndex(w => w.id === beforeId) : -1;
+	if (target === -1) {
+		let last = -1;
+		config.wikis.forEach((w, i) => {
+			if (groupOf(w) === (group || null)) {
+				last = i;
+			}
+		});
+		target = last === -1 ? config.wikis.length : last + 1;
+	}
+	config.wikis.splice(target, 0, wiki);
+	saveConfig();
+	pushState();
+});
+
 ipcMain.handle("save-group", (event, input) => {
 	const name = (input.name || "").trim();
 	validateGroupName(name, input.id);

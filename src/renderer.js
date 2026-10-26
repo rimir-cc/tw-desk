@@ -48,6 +48,11 @@ function cleanError(e) {
 }
 
 function render() {
+	// Rebuilding the list would end a drag; render once it's over
+	if (draggedId) {
+		renderPending = true;
+		return;
+	}
 	const list = $("#wiki-list");
 	list.replaceChildren();
 	$("#empty-hint").hidden = state.wikis.length > 0 || state.groups.length > 0;
@@ -60,15 +65,19 @@ function render() {
 		if (!wikis.length) {
 			const empty = document.createElement("li");
 			empty.className = "group-empty muted";
-			empty.textContent = "No wikis in this group. Choose the group in a wiki's Edit dialog.";
+			empty.dataset.group = group.id;
+			empty.textContent = "No wikis in this group. Drag a wiki here, or choose the group in its Edit dialog.";
 			list.append(empty);
 		}
 		wikis.forEach((wiki, index) => list.append(wikiItem(wiki, index, wikis.length)));
 	}
 	const ungrouped = state.wikis.filter(w => !w.group);
 	const showUngroupedHeader = ungrouped.length && state.groups.length;
-	if (showUngroupedHeader) {
-		list.append(groupHeader(null, ungrouped));
+	if (state.groups.length) {
+		// Without ungrouped wikis the header is only shown while dragging, as a drop target
+		const header = groupHeader(null, ungrouped);
+		header.classList.toggle("drop-only", !ungrouped.length);
+		list.append(header);
 	}
 	if (!(showUngroupedHeader && state.ungroupedCollapsed)) {
 		ungrouped.forEach((wiki, index) => list.append(wikiItem(wiki, index, ungrouped.length)));
@@ -98,6 +107,7 @@ function groupHeader(group, wikis) {
 	const collapsed = group ? !!group.collapsed : !!state.ungroupedCollapsed;
 	const li = document.createElement("li");
 	li.className = "group-header";
+	li.dataset.group = group ? group.id : "";
 	const toggle = button((collapsed ? "▸ " : "▾ ") + (group ? group.name : "Ungrouped"), () => api.setGroupCollapsed(group ? group.id : null, !collapsed), {
 		className: "ghost group-toggle",
 		title: collapsed ? "Show the wikis of this group" : "Hide the wikis of this group"
@@ -126,6 +136,9 @@ function wikiItem(wiki, index, count) {
 	const busy = wiki.status === "starting";
 	const li = document.createElement("li");
 	li.className = "wiki" + (wiki.id === logWikiId ? " selected" : "");
+	li.draggable = true;
+	li.dataset.wikiId = wiki.id;
+	li.dataset.group = wiki.group || "";
 
 	const dot = document.createElement("span");
 	dot.className = "dot " + wiki.status;
@@ -174,25 +187,133 @@ function wikiItem(wiki, index, count) {
 
 	const actions = document.createElement("div");
 	actions.className = "wiki-actions";
+	const more = button("⋯", () => showMenu(wikiMenu(wiki, index, count), more), { className: "ghost more", title: "More: browser, folder, log, git, edit, copy, move, remove" });
 	actions.append(
 		running || busy
 			? button("Stop", () => api.stopWiki(wiki.id), { disabled: busy })
 			: button("Start", () => api.startWiki(wiki.id)),
 		button("Open", () => api.openWiki(wiki.id, false), { className: "primary", title: "Open in a TW Desk window (starts the server if needed)" }),
-		button("Browser", () => api.openWiki(wiki.id, true), { title: wiki.url ? "Open " + wiki.url + " in the default browser" : "Open in the default browser (starts the server if needed)" }),
-		button("Folder", () => api.showFolder(wiki.id), { title: "Show the wiki folder in " + (FILE_MANAGER[state.platform] || "the file manager") }),
-		button("Log", () => showPanel(wiki.id, "log")),
-		button("Copy…", () => openCreateWizard("copy", wiki), { title: "Create a new wiki as a copy of this one" }),
-		button("Edit", () => openDialog(wiki), { disabled: running || busy, title: running || busy ? "Stop the wiki to edit it" : "Edit" }),
-		button("▲", () => api.moveWiki(wiki.id, -1), { disabled: index === 0, className: "ghost", title: "Move up" }),
-		button("▼", () => api.moveWiki(wiki.id, 1), { disabled: index === count - 1, className: "ghost", title: "Move down" }),
-		button("Remove…", () => openRemoveDialog(wiki), { className: "danger", title: "Remove from the list, or delete the wiki (folder to the trash)" })
+		more
 	);
 
 	li.append(dot, info, actions);
 	li.addEventListener("dblclick", () => run(() => api.openWiki(wiki.id, false)));
+	li.addEventListener("contextmenu", event => {
+		event.preventDefault();
+		showMenu(wikiMenu(wiki, index, count), { x: event.clientX, y: event.clientY });
+	});
 	return li;
 }
+
+// The "⋯" menu and right-click menu of a wiki row; index and count: its position within its group
+function wikiMenu(wiki, index, count) {
+	const busy = wiki.status === "running" || wiki.status === "starting";
+	const act = action => () => run(action);
+	const gitAvailable = !!(state.git && state.git.available);
+	return [
+		{ label: "Open in browser", action: act(() => api.openWiki(wiki.id, true)), title: wiki.url ? "Open " + wiki.url + " in the default browser" : "Starts the server if needed" },
+		{ label: "Show in " + (FILE_MANAGER[state.platform] || "file manager"), action: act(() => api.showFolder(wiki.id)), title: wiki.path },
+		"-",
+		{ label: "Log", action: act(() => showPanel(wiki.id, "log")) },
+		{ label: "Git", action: act(() => showPanel(wiki.id, "git")), disabled: !gitAvailable, title: gitAvailable ? "" : "Git isn't installed" },
+		"-",
+		{ label: "Edit…", action: act(() => openDialog(wiki)), disabled: busy, title: busy ? "Stop the wiki to edit it" : "" },
+		{ label: "Copy…", action: act(() => openCreateWizard("copy", wiki)), title: "Create a new wiki as a copy of this one" },
+		"-",
+		{ label: "Move up", action: act(() => api.moveWiki(wiki.id, -1)), disabled: index === 0 },
+		{ label: "Move down", action: act(() => api.moveWiki(wiki.id, 1)), disabled: index === count - 1 },
+		"-",
+		{ label: "Remove…", action: act(() => openRemoveDialog(wiki)), title: "Remove from the list, or delete the wiki (folder to the trash)" }
+	];
+}
+
+// ---------- drag and drop ----------
+
+let draggedId = null;
+let renderPending = false;
+
+function clearDropMarks() {
+	for (const element of document.querySelectorAll(".drop-before, .drop-after, .drop-into")) {
+		element.classList.remove("drop-before", "drop-after", "drop-into");
+	}
+}
+
+// Where a drop at the pointer would put the dragged wiki: { li, group, beforeId, mark } or null
+function dropTarget(event) {
+	const li = draggedId && event.target.closest ? event.target.closest("#wiki-list > li") : null;
+	if (!li) {
+		return null;
+	}
+	const group = li.dataset.group || null;
+	if (li.classList.contains("wiki")) {
+		if (li.dataset.wikiId === draggedId) {
+			return null;
+		}
+		const rect = li.getBoundingClientRect();
+		if (event.clientY < rect.top + rect.height / 2) {
+			return { li, group, beforeId: li.dataset.wikiId, mark: "drop-before" };
+		}
+		const next = li.nextElementSibling;
+		const beforeId = next && next.classList.contains("wiki") && (next.dataset.group || null) === group ? next.dataset.wikiId : null;
+		return { li, group, beforeId, mark: "drop-after" };
+	}
+	if (li.classList.contains("group-header") || li.classList.contains("group-empty")) {
+		return { li, group, beforeId: null, mark: "drop-into" };
+	}
+	return null;
+}
+
+function endDrag() {
+	draggedId = null;
+	clearDropMarks();
+	document.body.classList.remove("dragging-wiki");
+	if (renderPending) {
+		renderPending = false;
+		render();
+	}
+}
+
+const wikiList = $("#wiki-list");
+wikiList.addEventListener("dragstart", event => {
+	const li = event.target.closest && event.target.closest("li.wiki");
+	if (!li) {
+		return;
+	}
+	closeMenu();
+	draggedId = li.dataset.wikiId;
+	event.dataTransfer.effectAllowed = "move";
+	event.dataTransfer.setData("text/plain", li.querySelector(".wiki-name").firstChild.textContent);
+	document.body.classList.add("dragging-wiki");
+});
+wikiList.addEventListener("dragover", event => {
+	const target = dropTarget(event);
+	clearDropMarks();
+	if (target) {
+		event.preventDefault();
+		event.dataTransfer.dropEffect = "move";
+		target.li.classList.add(target.mark);
+	}
+});
+wikiList.addEventListener("dragleave", event => {
+	if (!wikiList.contains(event.relatedTarget)) {
+		clearDropMarks();
+	}
+});
+wikiList.addEventListener("drop", event => {
+	const target = dropTarget(event);
+	const id = draggedId;
+	endDrag();
+	if (target) {
+		event.preventDefault();
+		run(() => api.placeWiki(id, target.group, target.beforeId));
+	}
+});
+// Also fires when the drop happened elsewhere or was cancelled
+document.addEventListener("dragend", () => {
+	if (draggedId) {
+		endDrag();
+	}
+});
 
 // Fixed ports are always shown; automatic ones only while the server runs
 function portText(wiki) {
@@ -401,7 +522,7 @@ groupForm.addEventListener("submit", async event => {
 });
 
 $("#cancel-group").addEventListener("click", () => groupDialog.close());
-$("#add-group").addEventListener("click", () => openGroupDialog(null));
+
 
 // ---------- settings ----------
 
@@ -579,7 +700,7 @@ form.addEventListener("submit", async event => {
 	}
 });
 
-$("#add-wiki").addEventListener("click", () => run(() => openDialog(null)));
+
 
 // ---------- create wizard (empty wiki / load from HTML / copy of a wiki) ----------
 
@@ -795,8 +916,13 @@ createForm.addEventListener("submit", async event => {
 	}
 });
 
-$("#new-empty-wiki").addEventListener("click", () => run(() => openCreateWizard("empty")));
-$("#new-html-wiki").addEventListener("click", () => run(() => openCreateWizard("html")));
+$("#new-menu").addEventListener("click", () => showMenu([
+	{ label: "Empty wiki…", action: () => run(() => openCreateWizard("empty")), title: "Create a new, empty wiki folder" },
+	{ label: "Wiki from HTML file…", action: () => run(() => openCreateWizard("html")), title: "Convert a single-file TiddlyWiki (.html) into a wiki folder" },
+	{ label: "Add existing wiki folder…", action: () => run(() => openDialog(null)), title: "A folder that contains tiddlywiki.info" },
+	"-",
+	{ label: "Group…", action: () => openGroupDialog(null), title: "A group to sort wikis into" }
+], $("#new-menu")));
 
 for (const copyButton of document.querySelectorAll("button.copy")) {
 	copyButton.addEventListener("click", () => run(async () => {

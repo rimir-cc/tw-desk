@@ -119,8 +119,8 @@ function wikiItem(wiki, index, count) {
 	name.textContent = wiki.name;
 	const meta = document.createElement("div");
 	meta.className = "wiki-meta";
-	meta.textContent = STATUS_TEXT[wiki.status] + " · port " + wiki.port + (wiki.autostart ? " · autostart" : "") + " · " + wiki.path;
-	meta.title = wiki.path;
+	meta.textContent = STATUS_TEXT[wiki.status] + " · " + portText(wiki) + (wiki.autostart ? " · autostart" : "") + " · " + wiki.path;
+	meta.title = wiki.path + (!wiki.fixedPort && wiki.lastPort ? "\nAutomatic port; last used: " + wiki.lastPort : "");
 	info.append(name, meta);
 	if (wiki.status === "error" && wiki.error) {
 		const err = document.createElement("div");
@@ -151,7 +151,7 @@ function wikiItem(wiki, index, count) {
 			? button("Stop", () => api.stopWiki(wiki.id), { disabled: busy })
 			: button("Start", () => api.startWiki(wiki.id)),
 		button("Open", () => api.openWiki(wiki.id, false), { className: "primary", title: "Open in a TW Desk window (starts the server if needed)" }),
-		button("Browser", () => api.openWiki(wiki.id, true), { title: "Open " + wiki.url + " in the default browser" }),
+		button("Browser", () => api.openWiki(wiki.id, true), { title: wiki.url ? "Open " + wiki.url + " in the default browser" : "Open in the default browser (starts the server if needed)" }),
 		button("Folder", () => api.showFolder(wiki.id), { title: "Show the wiki folder in Explorer" }),
 		button("Log", () => showLog(wiki.id)),
 		button("Edit", () => openDialog(wiki), { disabled: running || busy, title: running || busy ? "Stop the wiki to edit it" : "Edit" }),
@@ -163,6 +163,18 @@ function wikiItem(wiki, index, count) {
 	li.append(dot, info, actions);
 	li.addEventListener("dblclick", () => run(() => api.openWiki(wiki.id, false)));
 	return li;
+}
+
+// Fixed ports are always shown; automatic ones only while the server runs
+function portText(wiki) {
+	if (wiki.port) {
+		return "port " + wiki.port + (wiki.port === wiki.fixedPort ? " (fixed)" : "");
+	}
+	return wiki.fixedPort ? "port " + wiki.fixedPort + " (fixed)" : "auto port";
+}
+
+function portHint() {
+	return "Leave empty to pick a port on each start: the last used one if free, otherwise the next free one from " + state.basePort + " (Settings).";
 }
 
 function folderName(folder) {
@@ -263,6 +275,29 @@ groupForm.addEventListener("submit", async event => {
 $("#cancel-group").addEventListener("click", () => groupDialog.close());
 $("#add-group").addEventListener("click", () => openGroupDialog(null));
 
+// ---------- settings ----------
+
+const settingsForm = $("#settings-form");
+
+$("#show-settings").addEventListener("click", () => {
+	settingsForm.elements.basePort.value = state.basePort;
+	$("#settings-error").hidden = true;
+	$("#settings-dialog").showModal();
+});
+
+settingsForm.addEventListener("submit", async event => {
+	event.preventDefault();
+	try {
+		await api.saveSettings({ basePort: Number(settingsForm.elements.basePort.value) });
+		$("#settings-dialog").close();
+	} catch (e) {
+		$("#settings-error").textContent = cleanError(e);
+		$("#settings-error").hidden = false;
+	}
+});
+
+$("#cancel-settings").addEventListener("click", () => $("#settings-dialog").close());
+
 // ---------- log panel ----------
 
 async function showLog(id) {
@@ -306,7 +341,8 @@ async function openDialog(wiki) {
 	$("#dialog-title").textContent = wiki ? "Edit wiki" : "Add existing wiki";
 	form.elements.name.value = wiki ? wiki.name : "";
 	form.elements.path.value = wiki ? wiki.path : "";
-	form.elements.port.value = wiki ? wiki.port : await api.suggestPort();
+	form.elements.fixedPort.value = wiki && wiki.fixedPort ? wiki.fixedPort : "";
+	form.querySelector(".port-hint").textContent = portHint();
 	form.elements.autostart.checked = wiki ? !!wiki.autostart : false;
 	groupOptions(form.elements.group, wiki && wiki.group);
 	$("#group-field").hidden = !state.groups.length;
@@ -382,7 +418,7 @@ form.addEventListener("submit", async event => {
 			id: editingId,
 			name: form.elements.name.value,
 			path: form.elements.path.value.trim(),
-			port: Number(form.elements.port.value),
+			fixedPort: form.elements.fixedPort.value.trim() || null,
 			autostart: form.elements.autostart.checked,
 			group: form.elements.group.value || null
 		});
@@ -432,7 +468,7 @@ async function openCreateWizard(fromHtml) {
 	}
 	// Most wikis sit side by side, so suggest the folder the first wiki is in
 	createForm.elements.parent.value = state.wikis.length ? parentOf(state.wikis[0].path) : "";
-	createForm.elements.port.value = await api.suggestPort();
+	createForm.querySelector(".port-hint").textContent = portHint();
 	groupOptions(createForm.elements.group, "");
 	$("#create-group-field").hidden = !state.groups.length;
 	showCreateStep();
@@ -562,7 +598,7 @@ createForm.addEventListener("submit", async event => {
 			parent: value("parent"),
 			folderName: value("folderName"),
 			name: value("name"),
-			port: Number(value("port")),
+			fixedPort: value("fixedPort") || null,
 			group: value("group") || null,
 			sharedPath: value("sharedPath"),
 			autostart: createForm.elements.autostart.checked

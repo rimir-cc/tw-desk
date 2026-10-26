@@ -50,6 +50,10 @@ folders** – use copies (see Testing).
     where `<name>` = title without `$:/plugins/` and `/` (and `:<>"|?*`) replaced by `_`.
   - Fetched with Electron `net.fetch` (uses system proxy settings).
 - Writing `tiddlywiki.info` (includes, plugin lists) re-serializes it with 4-space JSON; skipped if unchanged.
+- **Ports are automatic** (since 0.2.3): `config.basePort` + per wiki optional `fixedPort` and remembered
+  `lastPort`. On start: fixed port, else `lastPort` if free, else the next free port from `basePort` – skipping other
+  wikis' fixed and active ports and, if possible, their `lastPort`s (keeps URLs stable). Port choice is serialized
+  (`portQueue`) so autostart can't hand out one port twice. Old configs' `port` is migrated to `lastPort` on load.
 - `TW_DESK_USER_DATA` env var overrides the user data folder (config, store, backup) – used for testing.
 
 ## Testing
@@ -57,7 +61,7 @@ folders** – use copies (see Testing).
 Never run tests against the user's wikis or their `%APPDATA%\TW Desk`. Instead:
 
 1. Copy `orga`, `priv-orga`, `_shared` into a temp folder (drop `.git`), keep them side by side.
-2. Write a test `config.json` into a temp user-data folder with test ports (e.g. 18090/18091),
+2. Write a test `config.json` into a temp user-data folder with a test `basePort` (e.g. 18090),
    pointing at the copies.
 3. Run from source: `TW_DESK_USER_DATA=<temp userdata> npx electron . --remote-debugging-port=9350`
    (in the background), or the built app: `dist/win-unpacked/TW Desk.exe` with the same env var.

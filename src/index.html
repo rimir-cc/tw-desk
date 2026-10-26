@@ -13,6 +13,7 @@
 	<span class="spacer"></span>
 	<button id="show-includes" title="Which folders are included by which wikis">Includes</button>
 	<button id="show-plugins" title="Shared plugin store, libraries and the plugins of each wiki">Plugins</button>
+	<button id="show-settings" title="Start port for automatic ports">Settings</button>
 	<button id="add-group" title="Add a group to sort wikis into">+ Add group</button>
 	<button id="new-empty-wiki" title="Create a new, empty wiki folder">+ Empty wiki</button>
 	<button id="new-html-wiki" title="Convert a single-file TiddlyWiki (.html) into a wiki folder">+ Load from HTML</button>
@@ -51,8 +52,9 @@
 			</span>
 			<small class="muted">A folder containing tiddlywiki.info.</small>
 		</label>
-		<label>Port
-			<input name="port" type="number" min="1024" max="65535" required>
+<label>Fixed port <small class="muted">(optional)</small>
+			<input name="fixedPort" type="number" min="1024" max="65535" placeholder="automatic">
+			<small class="muted port-hint"></small>
 		</label>
 		<label id="group-field">Group
 			<select name="group"></select>
@@ -102,8 +104,9 @@
 			<label>Name
 				<input name="name">
 			</label>
-			<label>Port
-				<input name="port" type="number" min="1024" max="65535">
+	<label>Fixed port <small class="muted">(optional)</small>
+				<input name="fixedPort" type="number" min="1024" max="65535" placeholder="automatic">
+				<small class="muted port-hint"></small>
 			</label>
 			<label id="create-group-field">Group
 				<select name="group"></select>
@@ -123,6 +126,21 @@
 			<span class="spacer"></span>
 			<button type="button" id="create-back">Back</button>
 			<button type="submit" class="primary" id="create-next">Next</button>
+		</div>
+	</form>
+</dialog>
+
+<dialog id="settings-dialog">
+	<form id="settings-form" method="dialog">
+		<h2>Settings</h2>
+		<label>Start port for automatic ports
+			<input name="basePort" type="number" min="1024" max="65535" required>
+			<small class="muted">A wiki without a fixed port gets the port it used last time if that's free, otherwise the next free port from here on. Applies when a wiki is (re)started.</small>
+		</label>
+		<p id="settings-error" class="error" hidden></p>
+		<div class="actions">
+			<button type="button" id="cancel-settings">Cancel</button>
+			<button type="submit" class="primary">Save</button>
 		</div>
 	</form>
 </dialog>

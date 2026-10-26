@@ -5,7 +5,7 @@ const { contextBridge, ipcRenderer } = require("electron");
 contextBridge.exposeInMainWorld("twDesk", {
 	getState: () => ipcRenderer.invoke("get-state"),
 	getLogs: id => ipcRenderer.invoke("get-logs", id),
-	suggestPort: () => ipcRenderer.invoke("suggest-port"),
+	saveSettings: settings => ipcRenderer.invoke("save-settings", settings),
 	pickFolder: title => ipcRenderer.invoke("pick-folder", title),
 	pickFile: (title, filters) => ipcRenderer.invoke("pick-file", title, filters),
 	saveWiki: wiki => ipcRenderer.invoke("save-wiki", wiki),

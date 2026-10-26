@@ -37,6 +37,23 @@ function loadConfig() {
 	if (!Array.isArray(config.groups)) {
 		config.groups = [];
 	}
+	if (!validPort(config.basePort)) {
+		config.basePort = DEFAULT_BASE_PORT;
+	}
+	// Up to 0.2.2 every wiki had a fixed "port"; now ports are automatic and that port is only preferred
+	let migrated = false;
+	for (const wiki of config.wikis) {
+		if ("port" in wiki) {
+			if (!wiki.lastPort && validPort(wiki.port)) {
+				wiki.lastPort = wiki.port;
+			}
+			delete wiki.port;
+			migrated = true;
+		}
+	}
+	if (migrated) {
+		saveConfig();
+	}
 	if (!Array.isArray(config.libraries)) {
 		config.libraries = [
 			{ url: "https://tiddlywiki.com/library/v" + TW_VERSION + "/index.html", type: "tiddlywiki" },
@@ -71,13 +88,8 @@ function validateGroupName(name, ignoreId) {
 	}
 }
 
-function nextFreeConfigPort() {
-	const used = new Set(config.wikis.map(w => w.port));
-	let port = config.basePort || DEFAULT_BASE_PORT;
-	while (used.has(port)) {
-		port++;
-	}
-	return port;
+function validPort(port) {
+	return Number.isInteger(port) && port >= 1024 && port <= 65535;
 }
 
 function validateWiki(wiki, ignoreId) {
@@ -92,12 +104,14 @@ function validateSettings(wiki, ignoreId) {
 	if (!wiki.name || !wiki.name.trim()) {
 		throw new Error("Name is required.");
 	}
-	if (!Number.isInteger(wiki.port) || wiki.port < 1024 || wiki.port > 65535) {
-		throw new Error("Port must be a number between 1024 and 65535.");
-	}
-	const clash = config.wikis.find(w => w.id !== ignoreId && w.port === wiki.port);
-	if (clash) {
-		throw new Error("Port " + wiki.port + " is already used by \"" + clash.name + "\".");
+	if (wiki.fixedPort !== undefined) {
+		if (!validPort(wiki.fixedPort)) {
+			throw new Error("A fixed port must be a number between 1024 and 65535 (or leave it empty for automatic).");
+		}
+		const clash = config.wikis.find(w => w.id !== ignoreId && w.fixedPort === wiki.fixedPort);
+		if (clash) {
+			throw new Error("Port " + wiki.fixedPort + " is already the fixed port of \"" + clash.name + "\".");
+		}
 	}
 	const samePath = config.wikis.find(w => w.id !== ignoreId && path.resolve(w.path).toLowerCase() === path.resolve(wiki.path).toLowerCase());
 	if (samePath) {
@@ -110,9 +124,15 @@ function wikiFromInput(input) {
 		id: input.id || crypto.randomUUID(),
 		name: (input.name || "").trim(),
 		path: path.resolve(input.path || ""),
-		port: Number(input.port),
 		autostart: !!input.autostart
 	};
+	if (input.fixedPort !== null && input.fixedPort !== undefined && input.fixedPort !== "") {
+		wiki.fixedPort = Number(input.fixedPort);
+	}
+	const existing = config.wikis.find(w => w.id === input.id);
+	if (existing && existing.lastPort) {
+		wiki.lastPort = existing.lastPort;
+	}
 	if (input.group) {
 		if (!config.groups.some(g => g.id === input.group)) {
 			throw new Error("Unknown group " + input.group);
@@ -129,15 +149,22 @@ function serverState(id) {
 	return s ? { status: s.status, error: s.error } : { status: "stopped", error: null };
 }
 
+// The port the wiki's server is using now, or null while it's stopped
+function activePort(id) {
+	const s = servers.get(id);
+	return s && s.port && (s.status === "running" || s.status === "starting") ? s.port : null;
+}
+
 function snapshot() {
 	return {
 		appVersion: app.getVersion(),
 		twVersion: TW_VERSION,
 		configPath: configPath(),
 		installDir: app.isPackaged ? path.dirname(process.execPath) : app.getAppPath(),
+		basePort: config.basePort,
 		groups: config.groups,
 		ungroupedCollapsed: !!config.ungroupedCollapsed,
-		wikis: config.wikis.map(w => Object.assign({}, w, { group: groupOf(w) }, serverState(w.id), { url: wikiUrl(w) }, readIncludes(w.path)))
+		wikis: config.wikis.map(w => Object.assign({}, w, { group: groupOf(w) }, serverState(w.id), { port: activePort(w.id), url: wikiUrl(w.id) }, readIncludes(w.path)))
 	};
 }
 
@@ -222,8 +249,9 @@ function appendLog(id, text) {
 	}
 }
 
-function wikiUrl(wiki) {
-	return "http://127.0.0.1:" + wiki.port + "/";
+function wikiUrl(id) {
+	const port = activePort(id);
+	return port ? "http://127.0.0.1:" + port + "/" : null;
 }
 
 // ---------- servers ----------
@@ -246,6 +274,44 @@ function portIsFree(port) {
 	});
 }
 
+// Port choices run one at a time, so wikis started together (autostart) can't pick the same port
+let portQueue = Promise.resolve();
+
+function choosePort(wiki, state) {
+	const result = portQueue.then(async () => {
+		state.port = await findPort(wiki);
+		return state.port;
+	});
+	portQueue = result.catch(() => {});
+	return result;
+}
+
+// The fixed port; otherwise the port used last time if it's free, else the next free one from basePort on
+async function findPort(wiki) {
+	if (wiki.fixedPort) {
+		if (!(await portIsFree(wiki.fixedPort))) {
+			throw new Error("Port " + wiki.fixedPort + " is already in use by another program.");
+		}
+		return wiki.fixedPort;
+	}
+	const others = config.wikis.filter(w => w.id !== wiki.id);
+	const taken = new Set(others.map(w => activePort(w.id)).concat(others.map(w => w.fixedPort)).filter(Boolean));
+	// Avoided while other ports are free, so other wikis get their usual port (and URL) back too
+	const remembered = new Set(others.map(w => w.lastPort).filter(Boolean));
+	if (wiki.lastPort && !taken.has(wiki.lastPort) && (await portIsFree(wiki.lastPort))) {
+		return wiki.lastPort;
+	}
+	const last = Math.min(65535, config.basePort + 1000);
+	for (const avoidRemembered of [true, false]) {
+		for (let port = config.basePort; port <= last; port++) {
+			if (!taken.has(port) && !(avoidRemembered && remembered.has(port)) && (await portIsFree(port))) {
+				return port;
+			}
+		}
+	}
+	throw new Error("No free port between " + config.basePort + " and " + last + ".");
+}
+
 async function startWiki(id) {
 	const wiki = findWiki(id);
 	const existing = servers.get(id);
@@ -255,15 +321,22 @@ async function startWiki(id) {
 	const state = { child: null, status: "starting", error: null, logs: existing ? existing.logs : [] };
 	servers.set(id, state);
 	pushState();
-	if (!(await portIsFree(wiki.port))) {
+	let port;
+	try {
+		port = await choosePort(wiki, state);
+	} catch (e) {
 		state.status = "error";
-		state.error = "Port " + wiki.port + " is already in use by another program.";
+		state.error = e.message;
 		appendLog(id, state.error);
 		pushState();
 		return;
 	}
-	appendLog(id, "Starting TiddlyWiki " + TW_VERSION + ": " + wiki.path + " on port " + wiki.port);
-	const child = runTiddlyWiki([wiki.path, "--listen", "host=127.0.0.1", "port=" + wiki.port], "TiddlyWiki " + wiki.name);
+	if (!wiki.fixedPort && wiki.lastPort !== port) {
+		wiki.lastPort = port;
+		saveConfig();
+	}
+	appendLog(id, "Starting TiddlyWiki " + TW_VERSION + ": " + wiki.path + " on port " + port);
+	const child = runTiddlyWiki([wiki.path, "--listen", "host=127.0.0.1", "port=" + port], "TiddlyWiki " + wiki.name);
 	state.child = child;
 	const onOutput = data => {
 		const text = data.toString();
@@ -329,8 +402,9 @@ async function openWiki(id, external) {
 		await startWiki(id);
 		await waitForRunning(id, 60000);
 	}
+	const url = wikiUrl(id);
 	if (external) {
-		await shell.openExternal(wikiUrl(wiki));
+		await shell.openExternal(url);
 		return;
 	}
 	const existing = wikiWindows.get(id);
@@ -346,17 +420,17 @@ async function openWiki(id, external) {
 		webPreferences: { contextIsolation: true, nodeIntegration: false, sandbox: true }
 	});
 	// Links to other sites open in the default browser; links within the wiki stay in the window.
-	win.webContents.setWindowOpenHandler(({ url }) => {
-		if (!url.startsWith(wikiUrl(wiki))) {
-			shell.openExternal(url);
+	win.webContents.setWindowOpenHandler(({ url: target }) => {
+		if (!target.startsWith(url)) {
+			shell.openExternal(target);
 			return { action: "deny" };
 		}
 		return { action: "allow" };
 	});
-	win.webContents.on("will-navigate", (event, url) => {
-		if (!url.startsWith(wikiUrl(wiki))) {
+	win.webContents.on("will-navigate", (event, target) => {
+		if (!target.startsWith(url)) {
 			event.preventDefault();
-			shell.openExternal(url);
+			shell.openExternal(target);
 		}
 	});
 	win.on("page-title-updated", (event, title) => {
@@ -365,7 +439,7 @@ async function openWiki(id, external) {
 	});
 	win.on("closed", () => wikiWindows.delete(id));
 	wikiWindows.set(id, win);
-	win.loadURL(wikiUrl(wiki));
+	win.loadURL(url);
 }
 
 // ---------- creating wikis ----------
@@ -470,7 +544,15 @@ ipcMain.handle("get-state", () => snapshot());
 
 ipcMain.handle("get-logs", (event, id) => (servers.get(id) ? servers.get(id).logs : []));
 
-ipcMain.handle("suggest-port", () => nextFreeConfigPort());
+ipcMain.handle("save-settings", (event, input) => {
+	const basePort = Number(input.basePort);
+	if (!validPort(basePort)) {
+		throw new Error("The start port must be a number between 1024 and 65535.");
+	}
+	config.basePort = basePort;
+	saveConfig();
+	pushState();
+});
 
 ipcMain.handle("pick-folder", async (event, title) => {
 	const result = await dialog.showOpenDialog(managerWindow, { title, properties: ["openDirectory", "createDirectory"] });

@@ -3,7 +3,7 @@
 const api = window.twDesk;
 const $ = selector => document.querySelector(selector);
 
-let state = { wikis: [] };
+let state = { groups: [], wikis: [] };
 let logWikiId = null;
 let editingId = null;
 let dialogIncludes = []; // [{ path (absolute), readOnly, exists }] while the Edit dialog is open
@@ -42,69 +42,23 @@ function cleanError(e) {
 function render() {
 	const list = $("#wiki-list");
 	list.replaceChildren();
-	$("#empty-hint").hidden = state.wikis.length > 0;
-	state.wikis.forEach((wiki, index) => {
-		const running = wiki.status === "running";
-		const busy = wiki.status === "starting";
-		const li = document.createElement("li");
-		li.className = "wiki" + (wiki.id === logWikiId ? " selected" : "");
-
-		const dot = document.createElement("span");
-		dot.className = "dot " + wiki.status;
-		dot.title = STATUS_TEXT[wiki.status];
-
-		const info = document.createElement("div");
-		info.className = "wiki-info";
-		const name = document.createElement("div");
-		name.className = "wiki-name";
-		name.textContent = wiki.name;
-		const meta = document.createElement("div");
-		meta.className = "wiki-meta";
-		meta.textContent = STATUS_TEXT[wiki.status] + " · port " + wiki.port + (wiki.autostart ? " · autostart" : "") + " · " + wiki.path;
-		meta.title = wiki.path;
-		info.append(name, meta);
-		if (wiki.status === "error" && wiki.error) {
-			const err = document.createElement("div");
-			err.className = "wiki-error";
-			err.textContent = wiki.error;
-			info.append(err);
+	$("#empty-hint").hidden = state.wikis.length > 0 || state.groups.length > 0;
+	for (const group of state.groups) {
+		const wikis = state.wikis.filter(w => w.group === group.id);
+		list.append(groupHeader(group, wikis.length));
+		if (!wikis.length) {
+			const empty = document.createElement("li");
+			empty.className = "group-empty muted";
+			empty.textContent = "No wikis in this group. Choose the group in a wiki's Edit dialog.";
+			list.append(empty);
 		}
-		if (wiki.infoError) {
-			const err = document.createElement("div");
-			err.className = "wiki-error";
-			err.textContent = wiki.infoError;
-			info.append(err);
-		}
-		if (wiki.includes.length) {
-			const line = document.createElement("div");
-			line.className = "wiki-includes";
-			line.append("includes:");
-			for (const include of wiki.includes) {
-				line.append(includeChip(folderName(include.resolved) + (include.readOnly ? " (read-only)" : ""), include));
-			}
-			info.append(line);
-		}
-
-		const actions = document.createElement("div");
-		actions.className = "wiki-actions";
-		actions.append(
-			running || busy
-				? button("Stop", () => api.stopWiki(wiki.id), { disabled: busy })
-				: button("Start", () => api.startWiki(wiki.id)),
-			button("Open", () => api.openWiki(wiki.id, false), { className: "primary", title: "Open in a TW Desk window (starts the server if needed)" }),
-			button("Browser", () => api.openWiki(wiki.id, true), { title: "Open " + wiki.url + " in the default browser" }),
-			button("Folder", () => api.showFolder(wiki.id), { title: "Show the wiki folder in Explorer" }),
-			button("Log", () => showLog(wiki.id)),
-			button("Edit", () => openDialog(wiki), { disabled: running || busy, title: running || busy ? "Stop the wiki to edit it" : "Edit" }),
-			button("▲", () => api.moveWiki(wiki.id, -1), { disabled: index === 0, className: "ghost", title: "Move up" }),
-			button("▼", () => api.moveWiki(wiki.id, 1), { disabled: index === state.wikis.length - 1, className: "ghost", title: "Move down" }),
-			button("Remove", () => removeWiki(wiki), { className: "danger", title: "Remove from list (files are kept)" })
-		);
-
-		li.append(dot, info, actions);
-		li.addEventListener("dblclick", () => run(() => api.openWiki(wiki.id, false)));
-		list.append(li);
-	});
+		wikis.forEach((wiki, index) => list.append(wikiItem(wiki, index, wikis.length)));
+	}
+	const ungrouped = state.wikis.filter(w => !w.group);
+	if (ungrouped.length && state.groups.length) {
+		list.append(groupHeader(null, ungrouped.length));
+	}
+	ungrouped.forEach((wiki, index) => list.append(wikiItem(wiki, index, ungrouped.length)));
 	if (logWikiId) {
 		const wiki = state.wikis.find(w => w.id === logWikiId);
 		if (wiki) {
@@ -113,6 +67,91 @@ function render() {
 			hideLog();
 		}
 	}
+}
+
+// group null is the "Ungrouped" section
+function groupHeader(group, count) {
+	const li = document.createElement("li");
+	li.className = "group-header";
+	const name = document.createElement("strong");
+	name.textContent = group ? group.name : "Ungrouped";
+	const meta = document.createElement("span");
+	meta.className = "muted";
+	meta.textContent = count + (count === 1 ? " wiki" : " wikis");
+	const spacer = document.createElement("span");
+	spacer.className = "spacer";
+	li.append(name, meta, spacer);
+	if (group) {
+		li.append(
+			button("Rename", () => openGroupDialog(group), { className: "ghost" }),
+			button("Delete", () => removeGroup(group, count), { className: "ghost danger", title: "Delete the group (its wikis stay, ungrouped)" })
+		);
+	}
+	return li;
+}
+
+// index and count are the wiki's position within its group
+function wikiItem(wiki, index, count) {
+	const running = wiki.status === "running";
+	const busy = wiki.status === "starting";
+	const li = document.createElement("li");
+	li.className = "wiki" + (wiki.id === logWikiId ? " selected" : "");
+
+	const dot = document.createElement("span");
+	dot.className = "dot " + wiki.status;
+	dot.title = STATUS_TEXT[wiki.status];
+
+	const info = document.createElement("div");
+	info.className = "wiki-info";
+	const name = document.createElement("div");
+	name.className = "wiki-name";
+	name.textContent = wiki.name;
+	const meta = document.createElement("div");
+	meta.className = "wiki-meta";
+	meta.textContent = STATUS_TEXT[wiki.status] + " · port " + wiki.port + (wiki.autostart ? " · autostart" : "") + " · " + wiki.path;
+	meta.title = wiki.path;
+	info.append(name, meta);
+	if (wiki.status === "error" && wiki.error) {
+		const err = document.createElement("div");
+		err.className = "wiki-error";
+		err.textContent = wiki.error;
+		info.append(err);
+	}
+	if (wiki.infoError) {
+		const err = document.createElement("div");
+		err.className = "wiki-error";
+		err.textContent = wiki.infoError;
+		info.append(err);
+	}
+	if (wiki.includes.length) {
+		const line = document.createElement("div");
+		line.className = "wiki-includes";
+		line.append("includes:");
+		for (const include of wiki.includes) {
+			line.append(includeChip(folderName(include.resolved) + (include.readOnly ? " (read-only)" : ""), include));
+		}
+		info.append(line);
+	}
+
+	const actions = document.createElement("div");
+	actions.className = "wiki-actions";
+	actions.append(
+		running || busy
+			? button("Stop", () => api.stopWiki(wiki.id), { disabled: busy })
+			: button("Start", () => api.startWiki(wiki.id)),
+		button("Open", () => api.openWiki(wiki.id, false), { className: "primary", title: "Open in a TW Desk window (starts the server if needed)" }),
+		button("Browser", () => api.openWiki(wiki.id, true), { title: "Open " + wiki.url + " in the default browser" }),
+		button("Folder", () => api.showFolder(wiki.id), { title: "Show the wiki folder in Explorer" }),
+		button("Log", () => showLog(wiki.id)),
+		button("Edit", () => openDialog(wiki), { disabled: running || busy, title: running || busy ? "Stop the wiki to edit it" : "Edit" }),
+		button("▲", () => api.moveWiki(wiki.id, -1), { disabled: index === 0, className: "ghost", title: "Move up" }),
+		button("▼", () => api.moveWiki(wiki.id, 1), { disabled: index === count - 1, className: "ghost", title: "Move down" }),
+		button("Remove", () => removeWiki(wiki), { className: "danger", title: "Remove from list (files are kept)" })
+	);
+
+	li.append(dot, info, actions);
+	li.addEventListener("dblclick", () => run(() => api.openWiki(wiki.id, false)));
+	return li;
 }
 
 function folderName(folder) {
@@ -176,6 +215,43 @@ async function removeWiki(wiki) {
 	}
 }
 
+// ---------- groups ----------
+
+const groupForm = $("#group-form");
+const groupDialog = $("#group-dialog");
+let editingGroupId = null;
+
+function openGroupDialog(group) {
+	editingGroupId = group ? group.id : null;
+	groupForm.reset();
+	$("#group-error").hidden = true;
+	$("#group-dialog-title").textContent = group ? "Rename group" : "Add group";
+	groupForm.elements.name.value = group ? group.name : "";
+	groupDialog.showModal();
+	groupForm.elements.name.focus();
+}
+
+async function removeGroup(group, count) {
+	const note = count ? "\n\nIts " + (count === 1 ? "wiki stays" : count + " wikis stay") + " in TW Desk, ungrouped." : "";
+	if (confirm("Delete the group \"" + group.name + "\"?" + note)) {
+		await api.removeGroup(group.id);
+	}
+}
+
+groupForm.addEventListener("submit", async event => {
+	event.preventDefault();
+	try {
+		await api.saveGroup({ id: editingGroupId, name: groupForm.elements.name.value });
+		groupDialog.close();
+	} catch (e) {
+		$("#group-error").textContent = cleanError(e);
+		$("#group-error").hidden = false;
+	}
+});
+
+$("#cancel-group").addEventListener("click", () => groupDialog.close());
+$("#add-group").addEventListener("click", () => openGroupDialog(null));
+
 // ---------- log panel ----------
 
 async function showLog(id) {
@@ -234,6 +310,10 @@ async function openDialog(wiki) {
 	form.elements.path.value = wiki ? wiki.path : "";
 	form.elements.port.value = wiki ? wiki.port : await api.suggestPort();
 	form.elements.autostart.checked = wiki ? !!wiki.autostart : false;
+	const groupSelect = form.elements.group;
+	groupSelect.replaceChildren(new Option("— none —", ""), ...state.groups.map(g => new Option(g.name, g.id)));
+	groupSelect.value = wiki && wiki.group ? wiki.group : "";
+	$("#group-field").hidden = !state.groups.length;
 	// Includes are edited for existing wikis only; a new wiki gets its shared include via "Create new wiki"
 	dialogIncludes = wiki ? wiki.includes.map(i => ({ path: i.resolved, readOnly: i.readOnly, exists: i.exists })) : [];
 	$("#includes-field").hidden = !wiki;
@@ -322,6 +402,7 @@ form.addEventListener("submit", async event => {
 			path: form.elements.path.value.trim(),
 			port: Number(form.elements.port.value),
 			autostart: form.elements.autostart.checked,
+			group: form.elements.group.value || null,
 			createNew: !editingId && mode() === "new",
 			sharedPath: form.elements.sharedPath.value.trim()
 		});

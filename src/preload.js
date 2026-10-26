@@ -22,6 +22,8 @@ contextBridge.exposeInMainWorld("twDesk", {
 		moveToStore: (folder, file) => ipcRenderer.invoke("plugins-move-to-store", folder, file)
 	},
 	moveWiki: (id, delta) => ipcRenderer.invoke("move-wiki", id, delta),
+	saveGroup: group => ipcRenderer.invoke("save-group", group),
+	removeGroup: id => ipcRenderer.invoke("remove-group", id),
 	startWiki: id => ipcRenderer.invoke("start-wiki", id),
 	stopWiki: id => ipcRenderer.invoke("stop-wiki", id),
 	openWiki: (id, external) => ipcRenderer.invoke("open-wiki", id, external),

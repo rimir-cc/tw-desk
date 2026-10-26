@@ -16,7 +16,7 @@ const TW_PROCESS = path.join(__dirname, "tw-process.js");
 const TW_VERSION = require("tiddlywiki/package.json").version;
 
 let managerWindow = null;
-let config = { basePort: DEFAULT_BASE_PORT, wikis: [] };
+let config = { basePort: DEFAULT_BASE_PORT, groups: [], wikis: [] };
 const servers = new Map(); // wiki id -> { child, status, logs, error }
 const wikiWindows = new Map(); // wiki id -> BrowserWindow
 
@@ -28,11 +28,14 @@ function configPath() {
 
 function loadConfig() {
 	try {
-		config = Object.assign({ basePort: DEFAULT_BASE_PORT, wikis: [] }, JSON.parse(fs.readFileSync(configPath(), "utf8")));
+		config = Object.assign({ basePort: DEFAULT_BASE_PORT, groups: [], wikis: [] }, JSON.parse(fs.readFileSync(configPath(), "utf8")));
 	} catch (e) {
 		if (e.code !== "ENOENT") {
 			dialog.showErrorBox("TW Desk", "Could not read " + configPath() + ":\n" + e.message);
 		}
+	}
+	if (!Array.isArray(config.groups)) {
+		config.groups = [];
 	}
 	if (!Array.isArray(config.libraries)) {
 		config.libraries = [
@@ -53,6 +56,19 @@ function findWiki(id) {
 		throw new Error("Unknown wiki " + id);
 	}
 	return wiki;
+}
+
+function groupOf(wiki) {
+	return config.groups.some(g => g.id === wiki.group) ? wiki.group : null;
+}
+
+function validateGroupName(name, ignoreId) {
+	if (!name) {
+		throw new Error("Group name is required.");
+	}
+	if (config.groups.some(g => g.id !== ignoreId && g.name.toLowerCase() === name.toLowerCase())) {
+		throw new Error("A group named \"" + name + "\" already exists.");
+	}
 }
 
 function nextFreeConfigPort() {
@@ -93,7 +109,8 @@ function snapshot() {
 		twVersion: TW_VERSION,
 		configPath: configPath(),
 		installDir: app.isPackaged ? path.dirname(process.execPath) : app.getAppPath(),
-		wikis: config.wikis.map(w => Object.assign({}, w, serverState(w.id), { url: wikiUrl(w) }, readIncludes(w.path)))
+		groups: config.groups,
+		wikis: config.wikis.map(w => Object.assign({}, w, { group: groupOf(w) }, serverState(w.id), { url: wikiUrl(w) }, readIncludes(w.path)))
 	};
 }
 
@@ -370,6 +387,12 @@ ipcMain.handle("save-wiki", async (event, input) => {
 		port: Number(input.port),
 		autostart: !!input.autostart
 	};
+	if (input.group) {
+		if (!config.groups.some(g => g.id === input.group)) {
+			throw new Error("Unknown group " + input.group);
+		}
+		wiki.group = input.group;
+	}
 	if (!input.id && input.createNew) {
 		await initWiki(wiki.path, input.sharedPath ? path.resolve(input.sharedPath) : null);
 	}
@@ -522,15 +545,50 @@ ipcMain.handle("remove-wiki", (event, id) => {
 	pushState();
 });
 
+// Moves a wiki past its neighbour in the same group (the list is shown grouped)
 ipcMain.handle("move-wiki", (event, id, delta) => {
 	const index = config.wikis.findIndex(w => w.id === id);
-	const target = index + delta;
-	if (index !== -1 && target >= 0 && target < config.wikis.length) {
-		const [wiki] = config.wikis.splice(index, 1);
-		config.wikis.splice(target, 0, wiki);
+	if (index === -1) {
+		return;
+	}
+	const group = groupOf(config.wikis[index]);
+	let target = index + delta;
+	while (target >= 0 && target < config.wikis.length && groupOf(config.wikis[target]) !== group) {
+		target += delta;
+	}
+	if (target >= 0 && target < config.wikis.length) {
+		[config.wikis[index], config.wikis[target]] = [config.wikis[target], config.wikis[index]];
 		saveConfig();
 		pushState();
 	}
+});
+
+ipcMain.handle("save-group", (event, input) => {
+	const name = (input.name || "").trim();
+	validateGroupName(name, input.id);
+	if (input.id) {
+		const group = config.groups.find(g => g.id === input.id);
+		if (!group) {
+			throw new Error("Unknown group " + input.id);
+		}
+		group.name = name;
+	} else {
+		config.groups.push({ id: crypto.randomUUID(), name });
+	}
+	saveConfig();
+	pushState();
+});
+
+// The group's wikis stay in the list, ungrouped
+ipcMain.handle("remove-group", (event, id) => {
+	config.groups = config.groups.filter(g => g.id !== id);
+	for (const wiki of config.wikis) {
+		if (wiki.group === id) {
+			delete wiki.group;
+		}
+	}
+	saveConfig();
+	pushState();
 });
 
 ipcMain.handle("start-wiki", (event, id) => startWiki(id));

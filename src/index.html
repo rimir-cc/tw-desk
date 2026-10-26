@@ -13,6 +13,7 @@
 	<span class="spacer"></span>
 	<button id="show-includes" title="Which folders are included by which wikis">Includes</button>
 	<button id="show-plugins" title="Shared plugin store, libraries and the plugins of each wiki">Plugins</button>
+	<button id="add-group" title="Add a group to sort wikis into">+ Add group</button>
 	<button id="add-wiki" class="primary">+ Add wiki</button>
 </header>
 
@@ -61,6 +62,9 @@
 		<label>Port
 			<input name="port" type="number" min="1024" max="65535" required>
 		</label>
+		<label id="group-field">Group
+			<select name="group"></select>
+		</label>
 		<label class="inline"><input name="autostart" type="checkbox"> Start when TW Desk starts</label>
 		<div id="includes-field" hidden>
 			<div class="field-title">Included wikis <small class="muted">(includeWikis in tiddlywiki.info)</small></div>
@@ -71,6 +75,20 @@
 		<div class="actions">
 			<button type="button" id="cancel-dialog">Cancel</button>
 			<button type="submit" class="primary" id="save-dialog">Save</button>
+		</div>
+	</form>
+</dialog>
+
+<dialog id="group-dialog">
+	<form id="group-form" method="dialog">
+		<h2 id="group-dialog-title">Add group</h2>
+		<label>Name
+			<input name="name" required>
+		</label>
+		<p id="group-error" class="error" hidden></p>
+		<div class="actions">
+			<button type="button" id="cancel-group">Cancel</button>
+			<button type="submit" class="primary">Save</button>
 		</div>
 	</form>
 </dialog>

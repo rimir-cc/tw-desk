@@ -9,6 +9,8 @@ const plugins = require("./plugins");
 const git = require("./git");
 
 const DEFAULT_BASE_PORT = 8090;
+// Windows and (by default) macOS don't distinguish upper and lower case in paths
+const CASE_INSENSITIVE_PATHS = process.platform === "win32" || process.platform === "darwin";
 const MAX_LOG_LINES = 500;
 
 // Each TiddlyWiki command runs in an Electron utility process (a Node.js child process managed by Electron),
@@ -115,7 +117,7 @@ function validateSettings(wiki, ignoreId) {
 			throw new Error("Port " + wiki.fixedPort + " is already the fixed port of \"" + clash.name + "\".");
 		}
 	}
-	const samePath = config.wikis.find(w => w.id !== ignoreId && path.resolve(w.path).toLowerCase() === path.resolve(wiki.path).toLowerCase());
+	const samePath = config.wikis.find(w => w.id !== ignoreId && folderKey(w.path) === folderKey(wiki.path));
 	if (samePath) {
 		throw new Error("This folder is already in TW Desk as \"" + samePath.name + "\".");
 	}
@@ -163,6 +165,8 @@ function snapshot() {
 		twVersion: TW_VERSION,
 		configPath: configPath(),
 		installDir: app.isPackaged ? path.dirname(process.execPath) : app.getAppPath(),
+		platform: process.platform,
+		caseInsensitivePaths: CASE_INSENSITIVE_PATHS,
 		basePort: config.basePort,
 		git: gitSnapshot(),
 		groups: config.groups,
@@ -462,7 +466,8 @@ let gitTimer = null;
 let lastLocalCheck = 0;
 
 function folderKey(folder) {
-	return path.resolve(folder).toLowerCase();
+	const resolved = path.resolve(folder);
+	return CASE_INSENSITIVE_PATHS ? resolved.toLowerCase() : resolved;
 }
 
 function gitSettings() {
@@ -823,7 +828,7 @@ ipcMain.handle("save-includes", (event, id, entries) => {
 function knownFolders() {
 	const folders = new Map(); // lower-cased path -> folder
 	const add = (folderPath, wiki) => {
-		const key = path.resolve(folderPath).toLowerCase();
+		const key = folderKey(folderPath);
 		if (!folders.has(key)) {
 			folders.set(key, { path: path.resolve(folderPath), name: null, users: [] });
 		}
@@ -854,7 +859,7 @@ function knownFolders() {
 }
 
 function findFolder(folderPath) {
-	const folder = knownFolders().find(f => f.path.toLowerCase() === path.resolve(folderPath).toLowerCase());
+	const folder = knownFolders().find(f => folderKey(f.path) === folderKey(folderPath));
 	if (!folder) {
 		throw new Error("Unknown wiki folder: " + folderPath);
 	}

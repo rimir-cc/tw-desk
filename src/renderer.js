@@ -9,6 +9,13 @@ let panelTab = "log";
 let editingId = null;
 let dialogIncludes = []; // [{ path (absolute), readOnly, exists }] while the Edit dialog is open
 
+// Must match folderKey() in main.js
+function pathKey(folder) {
+	return state.caseInsensitivePaths ? folder.toLowerCase() : folder;
+}
+
+const FILE_MANAGER = { win32: "Explorer", darwin: "Finder" };
+
 const STATUS_TEXT = { running: "running", starting: "starting…", stopped: "stopped", error: "error" };
 
 // ---------- wiki list ----------
@@ -173,7 +180,7 @@ function wikiItem(wiki, index, count) {
 			: button("Start", () => api.startWiki(wiki.id)),
 		button("Open", () => api.openWiki(wiki.id, false), { className: "primary", title: "Open in a TW Desk window (starts the server if needed)" }),
 		button("Browser", () => api.openWiki(wiki.id, true), { title: wiki.url ? "Open " + wiki.url + " in the default browser" : "Open in the default browser (starts the server if needed)" }),
-		button("Folder", () => api.showFolder(wiki.id), { title: "Show the wiki folder in Explorer" }),
+		button("Folder", () => api.showFolder(wiki.id), { title: "Show the wiki folder in " + (FILE_MANAGER[state.platform] || "the file manager") }),
 		button("Log", () => showPanel(wiki.id, "log")),
 		button("Edit", () => openDialog(wiki), { disabled: running || busy, title: running || busy ? "Stop the wiki to edit it" : "Edit" }),
 		button("▲", () => api.moveWiki(wiki.id, -1), { disabled: index === 0, className: "ghost", title: "Move up" }),
@@ -216,7 +223,7 @@ function showIncludesOverview() {
 	const groups = new Map(); // lower-cased resolved folder -> { resolved, exists, users: [] }
 	for (const wiki of state.wikis) {
 		for (const include of wiki.includes) {
-			const key = include.resolved.toLowerCase();
+			const key = pathKey(include.resolved);
 			if (!groups.has(key)) {
 				groups.set(key, { resolved: include.resolved, exists: include.exists, users: [] });
 			}
@@ -234,7 +241,7 @@ function showIncludesOverview() {
 		const li = document.createElement("li");
 		const name = document.createElement("strong");
 		name.textContent = folderName(group.resolved);
-		const managed = state.wikis.find(w => w.path.toLowerCase() === group.resolved.toLowerCase());
+		const managed = state.wikis.find(w => pathKey(w.path) === pathKey(group.resolved));
 		const folder = document.createElement("div");
 		folder.className = "overview-path";
 		folder.textContent = group.resolved + (managed ? " · also in TW Desk as \"" + managed.name + "\"" : "") + (group.exists ? "" : " · missing (no tiddlywiki.info)");
@@ -429,7 +436,7 @@ function renderIncludesEditor() {
 
 $("#add-include").addEventListener("click", () => run(async () => {
 	const folder = await api.pickFolder("Wiki folder to include");
-	if (folder && !dialogIncludes.some(i => i.path.toLowerCase() === folder.toLowerCase())) {
+	if (folder && !dialogIncludes.some(i => pathKey(i.path) === pathKey(folder))) {
 		dialogIncludes.push({ path: folder, readOnly: false });
 		renderIncludesEditor();
 	}
@@ -667,7 +674,20 @@ for (const copyButton of document.querySelectorAll("button.copy")) {
 
 // ---------- start ----------
 
+// The placeholders in index.html show Windows paths
+function adaptPlaceholders(platform) {
+	if (platform === "win32") {
+		return;
+	}
+	for (const input of document.querySelectorAll("input[placeholder]")) {
+		input.placeholder = input.placeholder.replace(/C:\\…\\/g, "~/").replace(/\\/g, "/");
+	}
+}
+
 function applyState(newState) {
+	if (!state.platform) {
+		adaptPlaceholders(newState.platform);
+	}
 	state = newState;
 	$("#tw-version").textContent = "v" + state.appVersion + " · TiddlyWiki " + state.twVersion;
 	$("#config-path").textContent = state.configPath;

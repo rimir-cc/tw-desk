@@ -6,8 +6,10 @@
 const gitDrafts = new Map(); // repository root -> commit message being typed
 let gitBusy = false;
 
+const GIT_INSTALL_HINT = new Proxy({ win32: "Git for Windows", darwin: "the Xcode command line tools (xcode-select --install) or git from Homebrew" }, { get: (hints, platform) => hints[platform] || "git" });
+
 function gitStatusOf(folder) {
-	return state.git && state.git.folders ? state.git.folders[folder.toLowerCase()] : undefined;
+	return state.git && state.git.folders ? state.git.folders[pathKey(folder)] : undefined;
 }
 
 function gitAge(ms) {
@@ -126,7 +128,7 @@ function renderGitFooter() {
 		return;
 	}
 	if (!git.available) {
-		line.append("Git not found – install Git for Windows to see the version control status of your wikis.");
+		line.append("Git not found – install " + GIT_INSTALL_HINT[state.platform] + " to see the version control status of your wikis.");
 		return;
 	}
 	const interval = git.settings.interval;
@@ -180,7 +182,7 @@ function renderGitView(wiki) {
 		return;
 	}
 	if (!state.git.available) {
-		view.append(gitElement("p", "muted", "Git isn't installed or not on the PATH. Install Git for Windows and restart TW Desk."));
+		view.append(gitElement("p", "muted", "Git isn't installed or not on the PATH. Install " + GIT_INSTALL_HINT[state.platform] + " and restart TW Desk."));
 		return;
 	}
 	const folders = [{ path: wiki.path, label: wiki.name }].concat(wiki.includes.filter(i => i.exists).map(i => ({

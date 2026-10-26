@@ -487,7 +487,8 @@ function listStoredInWiki(folder) {
 function moveToStore(folder, file) {
 	const resolvedFolder = path.resolve(folder);
 	const resolvedFile = path.resolve(file);
-	if (!resolvedFile.toLowerCase().startsWith(path.join(resolvedFolder, "tiddlers").toLowerCase() + path.sep)) {
+	const relative = path.relative(path.join(resolvedFolder, "tiddlers"), resolvedFile);
+	if (!relative || relative.startsWith("..") || path.isAbsolute(relative)) {
 		throw new Error("File is not inside this wiki's tiddlers folder.");
 	}
 	const tiddler = readStoredPlugin(resolvedFile);

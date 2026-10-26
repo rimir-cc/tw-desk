@@ -1,13 +1,15 @@
 {
   "name": "tw-desk",
   "productName": "TW Desk",
-  "version": "0.2.4",
+  "version": "0.2.5",
   "description": "Small manager for local TiddlyWiki folder wikis",
   "main": "src/main.js",
   "private": true,
   "scripts": {
     "start": "electron .",
-    "dist": "electron-builder --win nsis"
+    "dist": "electron-builder --win nsis",
+    "dist:linux": "electron-builder --linux AppImage",
+    "dist:mac": "electron-builder --mac dmg"
   },
   "build": {
     "appId": "local.tw-desk",
@@ -28,6 +30,17 @@
       "createStartMenuShortcut": true,
       "shortcutName": "TW Desk",
       "artifactName": "TW-Desk-Setup-${version}.exe"
+    },
+    "linux": {
+      "target": "AppImage",
+      "category": "Office",
+      "artifactName": "TW-Desk-${version}.${ext}"
+    },
+    "mac": {
+      "target": "dmg",
+      "category": "public.app-category.productivity",
+      "identity": null,
+      "artifactName": "TW-Desk-${version}.${ext}"
     },
     "directories": {
       "output": "dist"

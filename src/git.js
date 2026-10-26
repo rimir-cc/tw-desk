@@ -7,7 +7,10 @@ const { execFile } = require("child_process");
 const fs = require("fs");
 const path = require("path");
 
-const ENV = Object.assign({}, process.env, {
+// Apps started from the Finder don't get the shell's PATH, so Homebrew's git (and its helpers) aren't found by name
+const MAC_PATHS = ["/opt/homebrew/bin", "/usr/local/bin"];
+
+const ENV = Object.assign({}, process.env, process.platform === "darwin" ? { PATH: [process.env.PATH].concat(MAC_PATHS).filter(Boolean).join(":") } : {}, {
 	GIT_TERMINAL_PROMPT: "0",
 	// Git Credential Manager would otherwise open a login window
 	GCM_INTERACTIVE: "never",
@@ -15,11 +18,13 @@ const ENV = Object.assign({}, process.env, {
 	GIT_OPTIONAL_LOCKS: "0"
 });
 
+let gitCommand = "git";
+
 const GITIGNORE = ["output/", "$__StoryList.tid", "$__temp*", ""].join("\n");
 
 function git(cwd, args, timeout = 20000) {
 	return new Promise((resolve, reject) => {
-		execFile("git", args, { cwd, env: ENV, timeout, windowsHide: true, maxBuffer: 16 * 1024 * 1024 }, (error, stdout, stderr) => {
+		execFile(gitCommand, args, { cwd, env: ENV, timeout, windowsHide: true, maxBuffer: 16 * 1024 * 1024 }, (error, stdout, stderr) => {
 			if (error) {
 				const message = (stderr || "").trim() || (error.killed ? "git timed out" : error.message);
 				reject(Object.assign(new Error(message), { code: error.code }));
@@ -30,8 +35,25 @@ function git(cwd, args, timeout = 20000) {
 	});
 }
 
+// /usr/bin/git on macOS is a stub that opens an install dialog when the command line tools are missing
+function macCommandLineTools() {
+	return new Promise(resolve => {
+		execFile("/usr/bin/xcode-select", ["-p"], { timeout: 10000 }, (error, stdout) => resolve(!error && fs.existsSync(stdout.trim())));
+	});
+}
+
 // Returns the git version, or null if git isn't installed
 async function version() {
+	if (process.platform === "darwin") {
+		const homebrew = MAC_PATHS.map(dir => path.join(dir, "git")).find(file => fs.existsSync(file));
+		if (homebrew) {
+			gitCommand = homebrew;
+		} else if (await macCommandLineTools()) {
+			gitCommand = "/usr/bin/git";
+		} else {
+			return null;
+		}
+	}
 	try {
 		return (await git(process.cwd(), ["--version"])).trim().replace(/^git version /, "");
 	} catch (e) {

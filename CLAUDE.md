@@ -91,6 +91,15 @@ install silently with `/S /D=<temp dir>`, and uninstall + remove its HKCU regist
 - Update TiddlyWiki: `npm install --save-exact tiddlywiki@<version>`, then compare the user's core overrides
   in their wikis (new-tiddler action, sidebar tabs Open/Recent, title cascade) with the new core.
 
+## Linux and macOS
+
+Built with `npm run dist:linux` (AppImage) / `dist:mac` (unsigned dmg, needs a Mac); neither has run yet. Paths are
+compared case-insensitively only on Windows and macOS (`folderKey()` in main.js, `pathKey()` in renderer.js – keep
+them in sync). On macOS git is looked up in `/opt/homebrew/bin`, `/usr/local/bin`, then `/usr/bin` only if the command
+line tools exist (the `/usr/bin/git` stub would open an install dialog). Folder names for new wikis keep the Windows
+rules everywhere, so wikis stay usable on Windows. The manager window quits the app when closed on every platform
+(the servers belong to it); Electron's default menu provides the macOS app menu and Cmd shortcuts.
+
 ## Conventions and pitfalls
 
 - Code style: tabs, double quotes, plain JS (no build step), small comments only where the "why" isn't obvious.

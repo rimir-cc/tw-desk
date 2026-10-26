@@ -146,6 +146,23 @@
 	</form>
 </dialog>
 
+<dialog id="remove-dialog">
+	<form id="remove-form" method="dialog">
+		<h2 id="remove-title">Remove wiki</h2>
+		<fieldset class="stacked">
+			<label class="inline"><input type="radio" name="removeMode" value="list" checked> Remove from TW Desk only – the folder stays on disk</label>
+			<label class="inline"><input type="radio" name="removeMode" value="delete"> Delete the wiki – move its folder to the <span class="trash-name"></span></label>
+		</fieldset>
+		<p id="remove-folder" class="muted small"></p>
+		<ul id="remove-notes" class="remove-notes"></ul>
+		<p id="remove-error" class="error" hidden></p>
+		<div class="actions">
+			<button type="button" id="cancel-remove">Cancel</button>
+			<button type="submit" class="danger" id="confirm-remove">Remove from list</button>
+		</div>
+	</form>
+</dialog>
+
 <dialog id="settings-dialog">
 	<form id="settings-form" method="dialog">
 		<h2>Settings</h2>

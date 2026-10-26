@@ -186,7 +186,7 @@ function wikiItem(wiki, index, count) {
 		button("Edit", () => openDialog(wiki), { disabled: running || busy, title: running || busy ? "Stop the wiki to edit it" : "Edit" }),
 		button("▲", () => api.moveWiki(wiki.id, -1), { disabled: index === 0, className: "ghost", title: "Move up" }),
 		button("▼", () => api.moveWiki(wiki.id, 1), { disabled: index === count - 1, className: "ghost", title: "Move down" }),
-		button("Remove", () => removeWiki(wiki), { className: "danger", title: "Remove from list (files are kept)" })
+		button("Remove…", () => openRemoveDialog(wiki), { className: "danger", title: "Remove from the list, or delete the wiki (folder to the trash)" })
 	);
 
 	li.append(dot, info, actions);
@@ -261,11 +261,110 @@ function showIncludesOverview() {
 $("#show-includes").addEventListener("click", showIncludesOverview);
 $("#close-includes").addEventListener("click", () => $("#includes-dialog").close());
 
-async function removeWiki(wiki) {
-	if (confirm("Remove \"" + wiki.name + "\" from TW Desk?\n\nThe wiki folder and its files are not deleted.")) {
-		await api.removeWiki(wiki.id);
+// ---------- remove / delete dialog ----------
+
+const removeForm = $("#remove-form");
+const TRASH_NAME = { win32: "Recycle Bin", darwin: "Trash" };
+let removing = null; // { wiki, check }
+
+function trashName() {
+	return TRASH_NAME[state.platform] || "trash";
+}
+
+// What could get lost: from the last git check of the wiki's folder
+function deleteWarnings(wiki) {
+	const status = gitStatusOf(wiki.path);
+	const onlyCopy = "after deleting, the " + trashName() + " is the only copy.";
+	if (!state.git || !state.git.available || !status || status.error) {
+		return ["The git status is unknown – make sure you have a copy elsewhere."];
+	}
+	if (!status.repo) {
+		return ["Not under version control – " + onlyCopy];
+	}
+	const warnings = [];
+	if (status.changedCount) {
+		warnings.push(status.changedCount + " changed " + (status.changedCount === 1 ? "tiddler is" : "tiddlers are") + " not committed.");
+	}
+	if (!status.remotes.length) {
+		warnings.push("The repository has no remote – " + onlyCopy);
+	} else if (!status.upstream) {
+		warnings.push("The branch was never pushed – " + onlyCopy);
+	} else if (status.ahead) {
+		warnings.push(status.ahead + (status.ahead === 1 ? " commit is" : " commits are") + " not pushed.");
+	}
+	if (pathKey(status.root) !== pathKey(wiki.path)) {
+		warnings.push("The folder is part of the repository " + status.root + ", which stays.");
+	}
+	return warnings;
+}
+
+function renderRemoveDialog() {
+	const { wiki, check } = removing;
+	const deleting = removeForm.elements.removeMode.value === "delete";
+	const deleteOption = removeForm.querySelector("input[value=delete]");
+	deleteOption.disabled = !check || check.blockers.length > 0;
+	$("#remove-folder").textContent = wiki.path + (check && check.exists ? " · " + check.files + (check.files === 1 ? " file" : " files") : "");
+	const notes = [];
+	if (!check) {
+		notes.push({ text: "Checking the folder…", className: "" });
+	} else if (check.blockers.length) {
+		notes.push(...check.blockers.map(text => ({ text: "Can't delete: " + text, className: "block" })));
+	} else if (deleting) {
+		notes.push(...deleteWarnings(wiki).map(text => ({ text: "⚠ " + text, className: "warn" })));
+		notes.push({ text: "Included folders (e.g. _shared) are not touched.", className: "" });
+	}
+	$("#remove-notes").replaceChildren(...notes.map(note => {
+		const li = document.createElement("li");
+		li.textContent = note.text;
+		li.className = note.className;
+		return li;
+	}));
+	$("#confirm-remove").textContent = deleting ? "Move to " + trashName() : "Remove from list";
+}
+
+async function openRemoveDialog(wiki) {
+	removing = { wiki, check: null };
+	removeForm.reset();
+	$("#remove-error").hidden = true;
+	$("#remove-title").textContent = "Remove \u201c" + wiki.name + "\u201d";
+	for (const element of removeForm.querySelectorAll(".trash-name")) {
+		element.textContent = trashName();
+	}
+	renderRemoveDialog();
+	$("#remove-dialog").showModal();
+	const check = await api.deleteCheck(wiki.id);
+	if (removing && removing.wiki === wiki) {
+		removing.check = check;
+		renderRemoveDialog();
 	}
 }
+
+removeForm.addEventListener("change", () => removing && renderRemoveDialog());
+
+removeForm.addEventListener("submit", async event => {
+	event.preventDefault();
+	const confirmButton = $("#confirm-remove");
+	confirmButton.disabled = true;
+	try {
+		if (removeForm.elements.removeMode.value === "delete") {
+			await api.deleteWiki(removing.wiki.id);
+		} else {
+			await api.removeWiki(removing.wiki.id);
+		}
+		$("#remove-dialog").close();
+		removing = null;
+	} catch (e) {
+		$("#remove-error").textContent = cleanError(e);
+		$("#remove-error").hidden = false;
+	} finally {
+		confirmButton.disabled = false;
+	}
+});
+
+$("#cancel-remove").addEventListener("click", () => {
+	removing = null;
+	$("#remove-dialog").close();
+});
 
 // ---------- groups ----------
 

@@ -1057,6 +1057,71 @@ ipcMain.handle("remove-wiki", (event, id) => {
 	pushState();
 });
 
+function isInside(folder, parent) {
+	const relative = path.relative(path.resolve(parent), path.resolve(folder));
+	return !relative || (!relative.startsWith("..") && !path.isAbsolute(relative));
+}
+
+// Why the wiki's folder can't be deleted right now (empty list: it can), plus its size for the dialog
+function deleteCheck(wiki) {
+	const blockers = [];
+	if (["running", "starting"].includes(serverState(wiki.id).status)) {
+		blockers.push("The wiki is running – stop it first.");
+	}
+	const includedBy = config.wikis.filter(w => w.id !== wiki.id && readIncludes(w.path).includes.some(i => folderKey(i.resolved) === folderKey(wiki.path)));
+	if (includedBy.length) {
+		blockers.push("Included by " + includedBy.map(w => "\"" + w.name + "\"").join(", ") + " – remove the include there first.");
+	}
+	const nested = config.wikis.filter(w => w.id !== wiki.id && isInside(w.path, wiki.path));
+	if (nested.length) {
+		blockers.push("The folder contains other wikis: " + nested.map(w => "\"" + w.name + "\"").join(", ") + ".");
+	}
+	let files = 0;
+	const count = dir => {
+		for (const entry of fs.readdirSync(dir, { withFileTypes: true })) {
+			if (entry.isDirectory()) {
+				if (entry.name !== ".git") {
+					count(path.join(dir, entry.name));
+				}
+			} else {
+				files++;
+			}
+		}
+	};
+	const exists = fs.existsSync(wiki.path);
+	if (exists) {
+		count(wiki.path);
+	} else {
+		blockers.push("The folder doesn't exist any more.");
+	}
+	return { path: path.resolve(wiki.path), exists, files, blockers };
+}
+
+ipcMain.handle("delete-check", (event, id) => deleteCheck(findWiki(id)));
+
+// Moves the wiki's folder to the trash (never deletes permanently) and removes it from the list
+ipcMain.handle("delete-wiki", async (event, id) => {
+	const wiki = findWiki(id);
+	const check = deleteCheck(wiki);
+	if (check.blockers.length) {
+		throw new Error(check.blockers.join("\n"));
+	}
+	try {
+		await shell.trashItem(check.path);
+	} catch (e) {
+		throw new Error("Could not move the folder to the trash, so nothing was deleted:\n" + e.message);
+	}
+	const win = wikiWindows.get(id);
+	if (win && !win.isDestroyed()) {
+		win.close();
+	}
+	servers.delete(id);
+	config.wikis = config.wikis.filter(w => w.id !== id);
+	saveConfig();
+	pushState();
+	checkGit({ fetch: false });
+});
+
 // Moves a wiki past its neighbour in the same group (the list is shown grouped)
 ipcMain.handle("move-wiki", (event, id, delta) => {
 	const index = config.wikis.findIndex(w => w.id === id);

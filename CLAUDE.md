@@ -56,6 +56,8 @@ folders** – use copies (see Testing).
   "config" mode keeps only tiddler files whose title (from `.meta` / `.tid` header / all titles of a `.json`) starts
   with `$:/` and drops `files/`. `includeWikis` paths are re-relativized to the new location. Copying into the source
   folder is refused. A new repo is initialized only if the target isn't already inside one.
+- **Deleting a wiki** only ever uses `shell.trashItem` (no `fs.rm` of wiki folders). `deleteCheck()` blocks it while the
+  wiki runs, while another wiki includes the folder, or when the folder contains another managed wiki.
 - **Ports are automatic** (since 0.2.3): `config.basePort` + per wiki optional `fixedPort` and remembered
   `lastPort`. On start: fixed port, else `lastPort` if free, else the next free port from `basePort` – skipping other
   wikis' fixed and active ports and, if possible, their `lastPort`s (keeps URLs stable). Port choice is serialized

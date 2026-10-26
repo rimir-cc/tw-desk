@@ -16,6 +16,8 @@ contextBridge.exposeInMainWorld("twDesk", {
 	saveWiki: wiki => ipcRenderer.invoke("save-wiki", wiki),
 	createWiki: input => ipcRenderer.invoke("create-wiki", input),
 	removeWiki: id => ipcRenderer.invoke("remove-wiki", id),
+	deleteCheck: id => ipcRenderer.invoke("delete-check", id),
+	deleteWiki: id => ipcRenderer.invoke("delete-wiki", id),
 	saveIncludes: (id, entries) => ipcRenderer.invoke("save-includes", id, entries),
 	plugins: {
 		getState: () => ipcRenderer.invoke("plugins-state"),

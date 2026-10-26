@@ -75,6 +75,7 @@ main { flex: 1; overflow: auto; padding: 12px 16px; }
 .group-empty { font-size: 12px; padding: 0 2px; }
 .wiki-info { flex: 1; min-width: 0; }
 .wiki-name { font-weight: 600; }
+.wiki-description { font-size: 12px; color: var(--muted); font-style: italic; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .wiki-meta { font-size: 12px; color: var(--muted); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .wiki-error { font-size: 12px; color: var(--error); }
 .wiki-includes { font-size: 12px; color: var(--muted); display: flex; flex-wrap: wrap; gap: 4px; align-items: center; margin-top: 2px; }
@@ -199,7 +200,8 @@ form fieldset { border: none; padding: 0; margin: 0 0 12px; display: flex; gap: 
 form fieldset label { flex-direction: row; align-items: center; gap: 6px; margin: 0; }
 form fieldset.stacked { flex-direction: column; gap: 6px; }
 .row input { flex: 1; }
-input:not([type=checkbox]):not([type=radio]) {
+textarea { resize: vertical; }
+textarea, input:not([type=checkbox]):not([type=radio]) {
 	font: inherit;
 	padding: 5px 8px;
 	border: 1px solid var(--border);

@@ -6,6 +6,7 @@ TiddlyWiki (currently 5.4.1) is bundled; each wiki runs as its own server on `12
 ## Use
 
 - **Wiki rows:** Start/Stop, Open and **⋯** (also on right-click): Open in browser, Show folder, Log, Git, Edit…, Copy…, Move up/down, Remove…. Double-click opens the wiki. **Drag a row** to reorder it or to move it into another group (also while it runs; drop on a group header to append it there, on "Ungrouped" to take it out of its group).
+- **Description:** an optional text per wiki (Edit dialog, or right away in the create/copy wizard), shown in italics under its name – e.g. what a test copy is for. Copies also show where they came from: "copy of Orga · 2026-10-26".
 - **Add a wiki:** `+ New` → *Add existing wiki folder…* (contains `tiddlywiki.info`).
 - **New wiki:** `+ New` → *Empty wiki…* → wizard: where (parent folder + folder name), then name, optional fixed port, group, optional shared wiki to include (e.g. `../_shared`). Creates a server wiki (`tiddlywiki --init server`).
 - **Remove or delete:** *Remove…* in a wiki's ⋯ menu → *remove from TW Desk only* (folder stays) or *delete the wiki*: its folder is moved to the Recycle Bin / Trash (never deleted permanently; if that isn't possible, nothing is deleted). Deleting is only possible while the wiki is stopped, no other wiki includes its folder and it contains no other wiki; the dialog warns about uncommitted or unpushed changes and missing repositories/remotes. Included folders are never deleted with a wiki.

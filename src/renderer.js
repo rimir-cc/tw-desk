@@ -157,7 +157,16 @@ function wikiItem(wiki, index, count) {
 	meta.className = "wiki-meta";
 	meta.textContent = STATUS_TEXT[wiki.status] + " · " + portText(wiki) + (wiki.autostart ? " · autostart" : "") + " · " + wiki.path;
 	meta.title = wiki.path + (!wiki.fixedPort && wiki.lastPort ? "\nAutomatic port; last used: " + wiki.lastPort : "");
-	info.append(name, meta);
+	info.append(name);
+	const about = aboutText(wiki);
+	if (about) {
+		const line = document.createElement("div");
+		line.className = "wiki-description";
+		line.textContent = about;
+		line.title = about.replace(" — ", "\n\n");
+		info.append(line);
+	}
+	info.append(meta);
 	if (wiki.status === "error" && wiki.error) {
 		const err = document.createElement("div");
 		err.className = "wiki-error";
@@ -314,6 +323,20 @@ document.addEventListener("dragend", () => {
 		endDrag();
 	}
 });
+
+// "copy of Orga · 2026-10-26 — description" (either part may be missing)
+function aboutText(wiki) {
+	const parts = [];
+	if (wiki.copiedFrom) {
+		const original = state.wikis.find(w => w.id === wiki.copiedFrom.id);
+		// The original may have been renamed since
+		parts.push("copy of " + (original ? original.name : wiki.copiedFrom.name) + " · " + wiki.copiedFrom.date);
+	}
+	if (wiki.description) {
+		parts.push(wiki.description.replace(/\s*\n\s*/g, " "));
+	}
+	return parts.join(" — ");
+}
 
 // Fixed ports are always shown; automatic ones only while the server runs
 function portText(wiki) {
@@ -606,6 +629,7 @@ async function openDialog(wiki) {
 	$("#form-error").hidden = true;
 	$("#dialog-title").textContent = wiki ? "Edit wiki" : "Add existing wiki";
 	form.elements.name.value = wiki ? wiki.name : "";
+	form.elements.description.value = wiki && wiki.description ? wiki.description : "";
 	form.elements.path.value = wiki ? wiki.path : "";
 	form.elements.fixedPort.value = wiki && wiki.fixedPort ? wiki.fixedPort : "";
 	form.querySelector(".port-hint").textContent = portHint();
@@ -683,6 +707,7 @@ form.addEventListener("submit", async event => {
 		await api.saveWiki({
 			id: editingId,
 			name: form.elements.name.value,
+			description: form.elements.description.value,
 			path: form.elements.path.value.trim(),
 			fixedPort: form.elements.fixedPort.value.trim() || null,
 			autostart: form.elements.autostart.checked,
@@ -898,6 +923,7 @@ createForm.addEventListener("submit", async event => {
 			parent: value("parent"),
 			folderName: value("folderName"),
 			name: value("name"),
+			description: value("description"),
 			fixedPort: value("fixedPort") || null,
 			group: value("group") || null,
 			sharedPath: wizard.mode === "copy" ? "" : value("sharedPath"),

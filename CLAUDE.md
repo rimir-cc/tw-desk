@@ -58,6 +58,9 @@ folders** – use copies (see Testing).
   folder is refused. A new repo is initialized only if the target isn't already inside one.
 - **Deleting a wiki** only ever uses `shell.trashItem` (no `fs.rm` of wiki folders). `deleteCheck()` blocks it while the
   wiki runs, while another wiki includes the folder, or when the folder contains another managed wiki.
+- **Wiki description** (`description`) and, for copies, `copiedFrom: { id, name, path, date }` live in `config.json`,
+  not in `tiddlywiki.info` (its `description` holds edition texts like "Basic client-server edition"). The list shows
+  the original's current name if it still exists.
 - **Ports are automatic** (since 0.2.3): `config.basePort` + per wiki optional `fixedPort` and remembered
   `lastPort`. On start: fixed port, else `lastPort` if free, else the next free port from `basePort` – skipping other
   wikis' fixed and active ports and, if possible, their `lastPort`s (keeps URLs stable). Port choice is serialized
@@ -116,7 +119,7 @@ rules everywhere, so wikis stay usable on Windows. The manager window quits the 
 
 ## State (as of 2026-10-26)
 
-- Version 0.2.8 committed (groups, update check per library, create/copy/delete wizards, automatic ports, git,
+- Version 0.2.9 committed (groups, descriptions, update check per library, create/copy/delete wizards, automatic ports, git,
   Linux/macOS build targets, row menus and drag & drop). Builds are made by the user on Windows; this sandbox
   can't install Electron (no npm registry access). 0.2.0 was the first update from the short-path layout.
 - The user's plugins are still stored as tiddlers inside `_shared` (relink*, CPL-Repo, rimir/*,

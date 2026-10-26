@@ -133,9 +133,16 @@ function wikiFromInput(input) {
 	if (input.fixedPort !== null && input.fixedPort !== undefined && input.fixedPort !== "") {
 		wiki.fixedPort = Number(input.fixedPort);
 	}
+	const description = String(input.description || "").trim().slice(0, 2000);
+	if (description) {
+		wiki.description = description;
+	}
 	const existing = config.wikis.find(w => w.id === input.id);
 	if (existing && existing.lastPort) {
 		wiki.lastPort = existing.lastPort;
+	}
+	if (existing && existing.copiedFrom) {
+		wiki.copiedFrom = existing.copiedFrom;
 	}
 	if (input.group) {
 		if (!config.groups.some(g => g.id === input.group)) {
@@ -834,6 +841,10 @@ async function createWiki(input) {
 			fs.rmSync(folder, { recursive: true, force: true });
 		}
 		throw e;
+	}
+	if (source) {
+		// Shown in the list ("copy of …"); kept as text so it survives renaming or removing the original
+		wiki.copiedFrom = { id: source.id, name: source.name, path: path.resolve(source.path), date: new Date().toISOString().slice(0, 10) };
 	}
 	config.wikis.push(wiki);
 	saveConfig();

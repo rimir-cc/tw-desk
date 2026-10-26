@@ -48,6 +48,9 @@
 		<label>Name
 			<input name="name" required>
 		</label>
+		<label>Description <small class="muted">(optional)</small>
+			<textarea name="description" rows="2" maxlength="2000" placeholder="What is this wiki for? e.g. “for testing the new relink version – not for real notes”"></textarea>
+		</label>
 		<label>Folder
 			<span class="row">
 				<input name="path" required>
@@ -116,6 +119,9 @@
 		<section data-step="settings">
 			<label>Name
 				<input name="name">
+			</label>
+			<label>Description <small class="muted">(optional)</small>
+				<textarea name="description" rows="2" maxlength="2000" placeholder="What is this wiki for? e.g. “for testing the new relink version – not for real notes”"></textarea>
 			</label>
 	<label>Fixed port <small class="muted">(optional)</small>
 				<input name="fixedPort" type="number" min="1024" max="65535" placeholder="automatic">

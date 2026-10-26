@@ -110,6 +110,7 @@ function snapshot() {
 		configPath: configPath(),
 		installDir: app.isPackaged ? path.dirname(process.execPath) : app.getAppPath(),
 		groups: config.groups,
+		ungroupedCollapsed: !!config.ungroupedCollapsed,
 		wikis: config.wikis.map(w => Object.assign({}, w, { group: groupOf(w) }, serverState(w.id), { url: wikiUrl(w) }, readIncludes(w.path)))
 	};
 }
@@ -574,6 +575,21 @@ ipcMain.handle("save-group", (event, input) => {
 		group.name = name;
 	} else {
 		config.groups.push({ id: crypto.randomUUID(), name });
+	}
+	saveConfig();
+	pushState();
+});
+
+// id null is the "Ungrouped" section
+ipcMain.handle("set-group-collapsed", (event, id, collapsed) => {
+	if (id) {
+		const group = config.groups.find(g => g.id === id);
+		if (!group) {
+			throw new Error("Unknown group " + id);
+		}
+		group.collapsed = !!collapsed;
+	} else {
+		config.ungroupedCollapsed = !!collapsed;
 	}
 	saveConfig();
 	pushState();

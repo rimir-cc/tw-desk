@@ -347,29 +347,33 @@ async function installFromLibrary(library, title) {
 }
 
 // For every plugin found in the store or stored inside wiki folders: newest version in any library
+// Adds to each installed plugin the versions the libraries offer (newest first).
+// A plugin can be in several libraries; the UI decides what counts as an update.
 async function checkUpdates(libraries, installed) {
 	const errors = [];
-	const newest = new Map(); // title -> { version, library }
+	const offers = new Map(); // title -> Map(library url -> version)
 	for (const library of libraries) {
 		try {
 			for (const entry of await libraryIndex(library, true)) {
-				const current = newest.get(entry.title);
-				if (!current || compareVersions(entry.version, current.version) > 0) {
-					newest.set(entry.title, { version: entry.version, library: library.url });
+				if (!offers.has(entry.title)) {
+					offers.set(entry.title, new Map());
+				}
+				const byLibrary = offers.get(entry.title);
+				const version = entry.version || "";
+				if (!byLibrary.has(library.url) || compareVersions(version, byLibrary.get(library.url)) > 0) {
+					byLibrary.set(library.url, version);
 				}
 			}
 		} catch (e) {
 			errors.push(library.url + ": " + e.message);
 		}
 	}
-	const updates = [];
-	for (const plugin of installed) {
-		const latest = newest.get(plugin.title);
-		if (latest && plugin.version && compareVersions(latest.version, plugin.version) > 0) {
-			updates.push(Object.assign({}, plugin, { latest: latest.version, latestLibrary: latest.library }));
-		}
-	}
-	return { updates, errors, checked: installed.length };
+	const results = installed.map(plugin => Object.assign({}, plugin, {
+		offers: [...(offers.get(plugin.title) || new Map())]
+			.map(([library, version]) => ({ library, version }))
+			.sort((a, b) => compareVersions(b.version, a.version))
+	}));
+	return { results, errors, librariesChecked: libraries.length - errors.length };
 }
 
 // ---------- tiddlywiki.info plugin lists ----------

@@ -45,7 +45,10 @@ function render() {
 	$("#empty-hint").hidden = state.wikis.length > 0 || state.groups.length > 0;
 	for (const group of state.groups) {
 		const wikis = state.wikis.filter(w => w.group === group.id);
-		list.append(groupHeader(group, wikis.length));
+		list.append(groupHeader(group, wikis));
+		if (group.collapsed) {
+			continue;
+		}
 		if (!wikis.length) {
 			const empty = document.createElement("li");
 			empty.className = "group-empty muted";
@@ -55,10 +58,13 @@ function render() {
 		wikis.forEach((wiki, index) => list.append(wikiItem(wiki, index, wikis.length)));
 	}
 	const ungrouped = state.wikis.filter(w => !w.group);
-	if (ungrouped.length && state.groups.length) {
-		list.append(groupHeader(null, ungrouped.length));
+	const showUngroupedHeader = ungrouped.length && state.groups.length;
+	if (showUngroupedHeader) {
+		list.append(groupHeader(null, ungrouped));
 	}
-	ungrouped.forEach((wiki, index) => list.append(wikiItem(wiki, index, ungrouped.length)));
+	if (!(showUngroupedHeader && state.ungroupedCollapsed)) {
+		ungrouped.forEach((wiki, index) => list.append(wikiItem(wiki, index, ungrouped.length)));
+	}
 	if (logWikiId) {
 		const wiki = state.wikis.find(w => w.id === logWikiId);
 		if (wiki) {
@@ -70,17 +76,22 @@ function render() {
 }
 
 // group null is the "Ungrouped" section
-function groupHeader(group, count) {
+function groupHeader(group, wikis) {
+	const count = wikis.length;
+	const collapsed = group ? !!group.collapsed : !!state.ungroupedCollapsed;
 	const li = document.createElement("li");
 	li.className = "group-header";
-	const name = document.createElement("strong");
-	name.textContent = group ? group.name : "Ungrouped";
+	const toggle = button((collapsed ? "▸ " : "▾ ") + (group ? group.name : "Ungrouped"), () => api.setGroupCollapsed(group ? group.id : null, !collapsed), {
+		className: "ghost group-toggle",
+		title: collapsed ? "Show the wikis of this group" : "Hide the wikis of this group"
+	});
 	const meta = document.createElement("span");
 	meta.className = "muted";
-	meta.textContent = count + (count === 1 ? " wiki" : " wikis");
+	const running = wikis.filter(w => w.status === "running").length;
+	meta.textContent = count + (count === 1 ? " wiki" : " wikis") + (collapsed && running ? " · " + running + " running" : "");
 	const spacer = document.createElement("span");
 	spacer.className = "spacer";
-	li.append(name, meta, spacer);
+	li.append(toggle, meta, spacer);
 	if (group) {
 		li.append(
 			button("Rename", () => openGroupDialog(group), { className: "ghost" }),

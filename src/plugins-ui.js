@@ -173,27 +173,11 @@ function renderStoreTab() {
 			el("span", { class: "spacer" }),
 			actionButton("Check for updates", async () => {
 				updatesResult = await papi.checkUpdates();
-				const count = updatesResult.updates.length;
-				return (count ? count + " update(s) available." : "Everything is up to date (" + updatesResult.checked + " checked).") + (updatesResult.errors.length ? "\n" + updatesResult.errors.join("\n") : "");
+				return updateSummary();
 			}, { class: "primary" })));
 
-	if (updatesResult && updatesResult.updates.length) {
-		panel.append(el("h3", {}, "Updates"));
-		const table = el("table", { class: "plugin-table" });
-		for (const update of updatesResult.updates) {
-			const inStore = update.source === "store";
-			table.append(el("tr", {},
-				el("td", {}, update.title, el("div", { class: "desc" }, inStore ? "in store" : "stored inside " + update.folder)),
-				el("td", {}, el("span", { class: "badge update" }, update.version + " → " + update.latest)),
-				el("td", { class: "actions-cell" }, inStore
-					? actionButton("Update", async () => {
-						const result = await papi.install(update.latestLibrary, update.title);
-						updatesResult.updates = updatesResult.updates.filter(u => u !== update);
-						return "Updated " + result.title + " to " + result.version + ". Restart the wikis using it to load the new version.";
-					})
-					: el("span", { class: "muted small" }, "Move it to the store (Wikis tab), then update"))));
-		}
-		panel.append(table);
+	if (updatesResult) {
+		renderUpdateCheck(panel);
 	}
 
 	panel.append(el("h3", {}, "In the store (" + pstate.store.length + ")"));
@@ -215,6 +199,114 @@ function renderStoreTab() {
 				await papi.remove(plugin.kind, plugin.name);
 				return "Removed " + plugin.title + " from the store.";
 			}, { class: "ghost danger", disabled: users.length > 0, title: users.length ? "Remove it from " + users.join(", ") + " first" : "" }))));
+	}
+	panel.append(table);
+}
+
+// ---------- update check ----------
+
+const UPDATE_STATUS = {
+	update: { order: 0, label: "update available", badge: "update" },
+	current: { order: 1, label: "up to date", badge: "store" },
+	unlisted: { order: 2, label: "not in any library", badge: "", hint: "None of your libraries has this plugin, so it can't be checked." },
+	unversioned: { order: 3, label: "no version", badge: "", hint: "The installed plugin has no version field, so it can't be compared." }
+};
+
+// Newer offers first; the library a store plugin was installed from wins a tie
+function newerOffers(result) {
+	if (!result.version) {
+		return [];
+	}
+	return result.offers
+		.filter(o => window.compareVersionsLoose(o.version, result.version) > 0)
+		.sort((a, b) => window.compareVersionsLoose(b.version, a.version) || (b.library === result.library) - (a.library === result.library));
+}
+
+function updateStatus(result) {
+	if (!result.version) {
+		return "unversioned";
+	}
+	if (!result.offers.length) {
+		return "unlisted";
+	}
+	return newerOffers(result).length ? "update" : "current";
+}
+
+// Short name for a library; the path is added when two libraries share a host
+function libraryLabel(url) {
+	const host = u => {
+		try {
+			return new URL(u).host;
+		} catch (e) {
+			return u;
+		}
+	};
+	if (pstate.libraries.filter(l => host(l.url) === host(url)).length < 2) {
+		return host(url);
+	}
+	const parsed = new URL(url);
+	return parsed.host + parsed.pathname.replace(/\/(index\.html)?$/, "");
+}
+
+function updateSummary() {
+	const counts = { update: 0, current: 0, unlisted: 0, unversioned: 0 };
+	for (const result of updatesResult.results) {
+		counts[updateStatus(result)]++;
+	}
+	const parts = [counts.update + " with updates", counts.current + " up to date"];
+	if (counts.unlisted) {
+		parts.push(counts.unlisted + " not in any library (not checked)");
+	}
+	if (counts.unversioned) {
+		parts.push(counts.unversioned + " without version (not checked)");
+	}
+	const libraries = updatesResult.librariesChecked;
+	return "Compared " + updatesResult.results.length + " installed plugins with " + libraries + (libraries === 1 ? " library: " : " libraries: ") + parts.join(", ") + "."
+		+ (updatesResult.errors.length ? "\nCould not read:\n" + updatesResult.errors.join("\n") : "");
+}
+
+function renderUpdateCheck(panel) {
+	panel.append(el("h3", {}, "Update check"),
+		el("p", { class: "muted small" }, "Plugins in the store and plugins stored inside wikis, with the version each library offers. A plugin can be in more than one library; you choose which one to update from."));
+	const rows = updatesResult.results
+		.map(result => ({ result, status: updateStatus(result) }))
+		.sort((a, b) => UPDATE_STATUS[a.status].order - UPDATE_STATUS[b.status].order || a.result.title.localeCompare(b.result.title));
+	const table = el("table", { class: "plugin-table" });
+	for (const { result, status } of rows) {
+		const inStore = result.source === "store";
+		const newer = newerOffers(result);
+		const where = inStore
+			? "in store" + (result.library ? " · installed from " + libraryLabel(result.library) : " · moved from a wiki")
+			: "stored inside " + result.folder;
+		const offers = result.offers.length
+			? result.offers.map(o => {
+				const cmp = result.version ? window.compareVersionsLoose(o.version, result.version) : 0;
+				return el("span", {
+					class: "badge" + (cmp > 0 ? " update" : cmp === 0 && result.version ? " store" : ""),
+					title: libraryLabel(o.library) + " offers " + (o.version || "no version") + (cmp > 0 ? " (newer)" : cmp < 0 ? " (older)" : " (same)")
+				}, libraryLabel(o.library) + " " + (o.version || "?"));
+			})
+			: [el("span", { class: "muted small" }, "—")];
+		let actions;
+		if (!newer.length) {
+			actions = null;
+		} else if (inStore) {
+			actions = newer.map((offer, index) => actionButton((newer.length > 1 ? "Update from " + libraryLabel(offer.library) : "Update") + " → " + offer.version, async () => {
+				const installed = await papi.install(offer.library, result.title);
+				result.version = installed.version;
+				result.library = offer.library;
+				return "Updated " + installed.title + " to " + installed.version + " from " + libraryLabel(offer.library) + ". Restart the wikis using it to load the new version.";
+			}, { class: index === 0 ? "primary" : "", title: "Install " + offer.version + " from " + offer.library + " into the store" }));
+		} else {
+			actions = el("span", { class: "muted small" }, "Move it to the store (Wikis tab), then update");
+		}
+		const info = UPDATE_STATUS[status];
+		table.append(el("tr", {},
+			el("td", {}, result.title, el("div", { class: "desc" }, where)),
+			el("td", {}, el("span", { class: "badge wiki", title: "installed version" }, result.version || "no version")),
+			el("td", {}, el("div", { class: "offers" }, offers)),
+			el("td", {}, el("span", { class: "badge " + info.badge, title: info.hint || "" }, status === "update" ? "→ " + newer[0].version : info.label)),
+			el("td", { class: "actions-cell" }, actions)));
 	}
 	panel.append(table);
 }

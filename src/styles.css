@@ -71,6 +71,7 @@ main { flex: 1; overflow: auto; padding: 12px 16px; }
 .group-header { display: flex; align-items: baseline; gap: 8px; margin-top: 10px; padding: 0 2px; }
 .group-header:first-child { margin-top: 0; }
 .group-header button { padding: 0 6px; font-size: 12px; }
+.group-header button.group-toggle { padding: 0 4px 0 0; font-size: 14px; font-weight: 600; }
 .group-empty { font-size: 12px; padding: 0 2px; }
 .wiki-info { flex: 1; min-width: 0; }
 .wiki-name { font-weight: 600; }
@@ -114,6 +115,8 @@ main { flex: 1; overflow: auto; padding: 12px 16px; }
 .badge.store { color: var(--running); border-color: var(--running); }
 .badge.wiki { color: var(--starting); border-color: var(--starting); }
 .badge.missing, .badge.update { color: var(--error); border-color: var(--error); }
+.offers { display: flex; flex-wrap: wrap; gap: 4px; }
+.plugin-table td.actions-cell button + button { margin-left: 4px; }
 .add-row { display: flex; gap: 6px; align-items: center; margin-top: 6px; }
 .add-row select, .add-row input { flex: 1; min-width: 0; }
 select { font: inherit; padding: 4px 6px; border: 1px solid var(--border); border-radius: 6px; background: var(--bg); color: var(--text); }

@@ -7,11 +7,11 @@ TiddlyWiki (currently 5.4.1) is bundled; each wiki runs as its own server on `12
 
 - **Add a wiki:** `+ Add wiki` → existing folder (contains `tiddlywiki.info`) or create a new one (optionally including a shared wiki such as `../_shared`).
 - **Start / Stop / Open / Browser / Log** per wiki; "Start when TW Desk starts" = autostart.
-- **Groups:** `+ Add group` creates a group; the list shows one section per group (wikis without a group under "Ungrouped"). A wiki belongs to at most one group, chosen in **Edit**. Rename/Delete in the group's header; deleting a group keeps its wikis (ungrouped). ▲/▼ move a wiki within its group.
+- **Groups:** `+ Add group` creates a group; the list shows one section per group (wikis without a group under "Ungrouped"). A wiki belongs to at most one group, chosen in **Edit**. Rename/Delete in the group's header; deleting a group keeps its wikis (ungrouped). ▲/▼ move a wiki within its group. Click a group's name to collapse or expand it (remembered in `config.json`).
 - **Includes** (`includeWikis` in `tiddlywiki.info`): shown under each wiki; the `Includes` button lists which wikis include which folder. Change them in **Edit** (wiki must be stopped; only folders with a `tiddlywiki.info`).
 - **Plugins** button:
   - *Wikis*: the plugins/themes/languages in each folder's `tiddlywiki.info` (also included folders such as `_shared`, whose plugins every including wiki gets). Add bundled or store plugins, remove them, and move plugins stored inside a wiki (as tiddlers) into the store; the original files go to `%APPDATA%\TW Desk\backup`.
-  - *Store*: shared plugins in `%APPDATA%\TW Desk\store` (kept on reinstall/update); check for and install updates.
+  - *Store*: shared plugins in `%APPDATA%\TW Desk\store` (kept on reinstall/update); check for updates: lists every store and wiki-stored plugin with the version each library offers (a plugin can be in several libraries; pick which one to update from), and which plugins can't be checked (not in any library / no version).
   - *Libraries*: plugin library URLs (standard TiddlyWiki libraries and CPL), browse and install.
   - TW Desk passes the store to TiddlyWiki via `TIDDLYWIKI_PLUGIN_PATH` (and the theme/language equivalents); bundled plugins take precedence. Changes apply when a wiki is (re)started.
 - Wiki list, groups and libraries: `%APPDATA%\TW Desk\config.json`.

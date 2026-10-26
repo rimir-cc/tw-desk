@@ -75,6 +75,8 @@ main { flex: 1; overflow: auto; padding: 12px 16px; }
 .group-empty { font-size: 12px; padding: 0 2px; }
 .wiki-info { flex: 1; min-width: 0; }
 .wiki-name { font-weight: 600; }
+.web-icon { width: 10px; flex: none; text-align: center; color: var(--accent); font-weight: 600; }
+.web-header { margin-top: 18px; }
 .wiki-description { font-size: 12px; color: var(--muted); font-style: italic; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .wiki-meta { font-size: 12px; color: var(--muted); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .wiki-error { font-size: 12px; color: var(--error); }

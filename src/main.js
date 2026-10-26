@@ -1,6 +1,6 @@
 "use strict";
 
-const { app, BrowserWindow, ipcMain, dialog, shell, utilityProcess, clipboard } = require("electron");
+const { app, BrowserWindow, ipcMain, dialog, shell, utilityProcess, clipboard, net: electronNet } = require("electron");
 const fs = require("fs");
 const net = require("net");
 const path = require("path");
@@ -19,7 +19,7 @@ const TW_PROCESS = path.join(__dirname, "tw-process.js");
 const TW_VERSION = require("tiddlywiki/package.json").version;
 
 let managerWindow = null;
-let config = { basePort: DEFAULT_BASE_PORT, groups: [], wikis: [] };
+let config = { basePort: DEFAULT_BASE_PORT, groups: [], wikis: [], webWikis: [] };
 const servers = new Map(); // wiki id -> { child, status, logs, error }
 const wikiWindows = new Map(); // wiki id -> BrowserWindow
 let quitting = false;
@@ -32,7 +32,7 @@ function configPath() {
 
 function loadConfig() {
 	try {
-		config = Object.assign({ basePort: DEFAULT_BASE_PORT, groups: [], wikis: [] }, JSON.parse(fs.readFileSync(configPath(), "utf8")));
+		config = Object.assign({ basePort: DEFAULT_BASE_PORT, groups: [], wikis: [], webWikis: [] }, JSON.parse(fs.readFileSync(configPath(), "utf8")));
 	} catch (e) {
 		if (e.code !== "ENOENT") {
 			dialog.showErrorBox("TW Desk", "Could not read " + configPath() + ":\n" + e.message);
@@ -40,6 +40,9 @@ function loadConfig() {
 	}
 	if (!Array.isArray(config.groups)) {
 		config.groups = [];
+	}
+	if (!Array.isArray(config.webWikis)) {
+		config.webWikis = [];
 	}
 	if (!validPort(config.basePort)) {
 		config.basePort = DEFAULT_BASE_PORT;
@@ -178,6 +181,8 @@ function snapshot() {
 		git: gitSnapshot(),
 		groups: config.groups,
 		ungroupedCollapsed: !!config.ungroupedCollapsed,
+		webWikis: config.webWikis,
+		webCollapsed: !!config.webCollapsed,
 		wikis: config.wikis.map(w => Object.assign({}, w, { group: groupOf(w) }, serverState(w.id), { port: activePort(w.id), url: wikiUrl(w.id) }, readIncludes(w.path)))
 	};
 }
@@ -681,14 +686,15 @@ const HTML_SKIP_FILTER = "[all[tiddlers]] -[[$:/StoryList]] -[[$:/HistoryList]] 
 
 // --savewikifolder references plugins from the official library by name (so the bundled versions are used) and,
 // with explodePlugins=no, saves other plugins as single files in tiddlers/, where the Plugins window can move them to the store.
-async function convertHtmlWiki(htmlFile, folder) {
+// label: what to call the source in messages (the web address for a download)
+async function convertHtmlWiki(htmlFile, folder, label = htmlFile) {
 	const html = fs.readFileSync(htmlFile, "utf8");
 	if (html.includes("id=\"encryptedStoreArea\"")) {
 		throw new Error("This wiki is password-protected and can't be converted. Open it in a browser, clear the password (Tools → Set password / Saving), save it, and try again.");
 	}
 	// TiddlyWiki 5.2+ keeps tiddlers in JSON script blocks, older versions in a storeArea div
 	if (!html.includes("tiddlywiki-tiddler-store") && !html.includes("id=\"storeArea\"")) {
-		throw new Error("This doesn't look like a TiddlyWiki file: " + htmlFile);
+		throw new Error("This doesn't look like a TiddlyWiki: " + label);
 	}
 	await runTiddlyWikiCommand(["--load", htmlFile, "--savewikifolder", folder, HTML_SKIP_FILTER, "explodePlugins=no"], "TiddlyWiki convert");
 }
@@ -774,7 +780,27 @@ function copyWikiFolder(source, target, mode) {
 	}
 }
 
-// Creates a new wiki folder (empty, converted from a single-file HTML wiki, or copied from another wiki) and adds it to the list
+function isWebUrl(text) {
+	return /^https?:\/\//i.test(String(text || "").trim());
+}
+
+// Downloads a single-file wiki into a temporary file (Electron's net uses the system proxy settings)
+async function downloadWiki(url) {
+	let response;
+	try {
+		response = await electronNet.fetch(url, { cache: "no-store" });
+	} catch (e) {
+		throw new Error("Could not download " + url + ":\n" + e.message);
+	}
+	if (!response.ok) {
+		throw new Error("Could not download " + url + ": HTTP " + response.status);
+	}
+	const file = path.join(app.getPath("temp"), "tw-desk-download-" + crypto.randomUUID() + ".html");
+	fs.writeFileSync(file, Buffer.from(await response.arrayBuffer()));
+	return file;
+}
+
+// Creates a new wiki folder (empty, converted from a single-file HTML wiki file or web address, or copied from another wiki) and adds it to the list
 async function createWiki(input) {
 	const folderName = (input.folderName || "").trim();
 	if (!folderName || /[\\/:*?"<>|]/.test(folderName) || /^\.+$/.test(folderName)) {
@@ -783,7 +809,8 @@ async function createWiki(input) {
 	if (!input.parent || !fs.existsSync(path.resolve(input.parent))) {
 		throw new Error("The folder to create the wiki in doesn't exist: " + (input.parent || "(none)"));
 	}
-	const htmlFile = input.htmlFile ? path.resolve(input.htmlFile) : null;
+	const htmlUrl = isWebUrl(input.htmlFile) ? input.htmlFile.trim() : null;
+	const htmlFile = input.htmlFile && !htmlUrl ? path.resolve(input.htmlFile) : null;
 	if (htmlFile && !fs.existsSync(htmlFile)) {
 		throw new Error("HTML file not found: " + htmlFile);
 	}
@@ -802,7 +829,14 @@ async function createWiki(input) {
 		throw new Error("The folder already exists and isn't empty: " + folder);
 	}
 	try {
-		if (htmlFile) {
+		if (htmlUrl) {
+			const downloaded = await downloadWiki(htmlUrl);
+			try {
+				await convertHtmlWiki(downloaded, folder, htmlUrl);
+			} finally {
+				fs.rmSync(downloaded, { force: true });
+			}
+		} else if (htmlFile) {
 			await convertHtmlWiki(htmlFile, folder);
 		} else if (source) {
 			copyWikiFolder(path.resolve(source.path), folder, input.copyMode);
@@ -842,9 +876,12 @@ async function createWiki(input) {
 		}
 		throw e;
 	}
+	const today = new Date().toISOString().slice(0, 10);
 	if (source) {
 		// Shown in the list ("copy of …"); kept as text so it survives renaming or removing the original
-		wiki.copiedFrom = { id: source.id, name: source.name, path: path.resolve(source.path), date: new Date().toISOString().slice(0, 10) };
+		wiki.copiedFrom = { id: source.id, name: source.name, path: path.resolve(source.path), date: today };
+	} else if (htmlUrl || htmlFile) {
+		wiki.importedFrom = { source: htmlUrl || htmlFile, date: today };
 	}
 	config.wikis.push(wiki);
 	saveConfig();
@@ -1201,6 +1238,76 @@ ipcMain.handle("save-group", (event, input) => {
 });
 
 // id null is the "Ungrouped" section
+// ---------- web wikis (links to wikis on the web) ----------
+
+function webWikiFromInput(input) {
+	let url;
+	try {
+		url = new URL(String(input.url || "").trim());
+	} catch (e) {
+		throw new Error("Please enter a web address, e.g. https://groktiddlywiki.com/read/");
+	}
+	if (url.protocol !== "http:" && url.protocol !== "https:") {
+		throw new Error("Only http and https addresses are supported.");
+	}
+	const link = { id: input.id || crypto.randomUUID(), name: String(input.name || "").trim() || url.host, url: url.href };
+	const description = String(input.description || "").trim().slice(0, 2000);
+	if (description) {
+		link.description = description;
+	}
+	return link;
+}
+
+function findWebWiki(id) {
+	const link = config.webWikis.find(l => l.id === id);
+	if (!link) {
+		throw new Error("Unknown web wiki " + id);
+	}
+	return link;
+}
+
+ipcMain.handle("save-web-wiki", (event, input) => {
+	const link = webWikiFromInput(input);
+	const clash = config.webWikis.find(l => l.id !== link.id && l.url === link.url);
+	if (clash) {
+		throw new Error("This address is already in the list as \"" + clash.name + "\".");
+	}
+	const index = config.webWikis.findIndex(l => l.id === link.id);
+	if (index === -1) {
+		config.webWikis.push(link);
+	} else {
+		config.webWikis[index] = link;
+	}
+	saveConfig();
+	pushState();
+	return link.id;
+});
+
+ipcMain.handle("remove-web-wiki", (event, id) => {
+	config.webWikis = config.webWikis.filter(l => l.id !== id);
+	saveConfig();
+	pushState();
+});
+
+// Only addresses from the list are opened
+ipcMain.handle("open-web-wiki", (event, id) => shell.openExternal(findWebWiki(id).url));
+
+ipcMain.handle("move-web-wiki", (event, id, delta) => {
+	const index = config.webWikis.findIndex(l => l.id === id);
+	const target = index + delta;
+	if (index !== -1 && target >= 0 && target < config.webWikis.length) {
+		[config.webWikis[index], config.webWikis[target]] = [config.webWikis[target], config.webWikis[index]];
+		saveConfig();
+		pushState();
+	}
+});
+
+ipcMain.handle("set-web-collapsed", (event, collapsed) => {
+	config.webCollapsed = !!collapsed;
+	saveConfig();
+	pushState();
+});
+
 ipcMain.handle("set-group-collapsed", (event, id, collapsed) => {
 	if (id) {
 		const group = config.groups.find(g => g.id === id);

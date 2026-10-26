@@ -84,13 +84,13 @@
 		<h2 id="create-title">New empty wiki</h2>
 		<ol id="create-steps" class="steps"></ol>
 		<section data-step="source">
-			<label>HTML file
+			<label>HTML file or web address
 				<span class="row">
-					<input name="htmlFile" placeholder="e.g. C:\…\mywiki.html">
+					<input name="htmlFile" placeholder="e.g. C:\…\mywiki.html or https://groktiddlywiki.com/read/">
 					<button type="button" id="pick-html">Browse…</button>
 				</span>
 			</label>
-			<p class="muted small">The file is converted into a wiki folder; the HTML file itself is not changed.
+			<p class="muted small">The file (or the page at the web address) is converted into a wiki folder; the original is not changed.
 				Plugins from the official library are referenced by name, so the wiki uses the versions bundled with
 				<span class="tw-version-name"></span>. Other plugins are kept inside the wiki; you can move them to the store in Plugins.</p>
 		</section>
@@ -186,6 +186,26 @@
 		<p id="settings-error" class="error" hidden></p>
 		<div class="actions">
 			<button type="button" id="cancel-settings">Cancel</button>
+			<button type="submit" class="primary">Save</button>
+		</div>
+	</form>
+</dialog>
+
+<dialog id="link-dialog">
+	<form id="link-form" method="dialog">
+		<h2 id="link-dialog-title">Add web wiki</h2>
+		<label>Web address
+			<input name="url" required placeholder="https://groktiddlywiki.com/read/">
+		</label>
+		<label>Name
+			<input name="name" placeholder="defaults to the host name">
+		</label>
+		<label>Description <small class="muted">(optional)</small>
+			<textarea name="description" rows="3" maxlength="2000" placeholder="What is it about, and why did you collect it?"></textarea>
+		</label>
+		<p id="link-error" class="error" hidden></p>
+		<div class="actions">
+			<button type="button" id="cancel-link">Cancel</button>
 			<button type="submit" class="primary">Save</button>
 		</div>
 	</form>

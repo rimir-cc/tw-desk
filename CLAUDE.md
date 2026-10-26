@@ -61,6 +61,9 @@ folders** – use copies (see Testing).
 - **Wiki description** (`description`) and, for copies, `copiedFrom: { id, name, path, date }` live in `config.json`,
   not in `tiddlywiki.info` (its `description` holds edition texts like "Basic client-server edition"). The list shows
   the original's current name if it still exists.
+- **Web wikis** (`config.webWikis`: `{ id, name, url, description }`) are links only; `open-web-wiki` opens only listed
+  addresses. Importing downloads with Electron's `net.fetch` to a temp file and runs the HTML conversion; the wiki gets
+  `importedFrom: { source, date }` (also for local HTML files).
 - **Ports are automatic** (since 0.2.3): `config.basePort` + per wiki optional `fixedPort` and remembered
   `lastPort`. On start: fixed port, else `lastPort` if free, else the next free port from `basePort` – skipping other
   wikis' fixed and active ports and, if possible, their `lastPort`s (keeps URLs stable). Port choice is serialized
@@ -119,7 +122,7 @@ rules everywhere, so wikis stay usable on Windows. The manager window quits the 
 
 ## State (as of 2026-10-26)
 
-- Version 0.2.9 committed (groups, descriptions, update check per library, create/copy/delete wizards, automatic ports, git,
+- Version 0.2.10 committed (groups, descriptions, web wiki links, update check per library, create/copy/delete wizards, automatic ports, git,
   Linux/macOS build targets, row menus and drag & drop). Builds are made by the user on Windows; this sandbox
   can't install Electron (no npm registry access). 0.2.0 was the first update from the short-path layout.
 - The user's plugins are still stored as tiddlers inside `_shared` (relink*, CPL-Repo, rimir/*,

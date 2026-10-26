@@ -82,6 +82,13 @@ function render() {
 	if (!(showUngroupedHeader && state.ungroupedCollapsed)) {
 		ungrouped.forEach((wiki, index) => list.append(wikiItem(wiki, index, ungrouped.length)));
 	}
+	const links = state.webWikis || [];
+	if (links.length) {
+		list.append(webHeader(links));
+		if (!state.webCollapsed) {
+			links.forEach((link, index) => list.append(webItem(link, index, links.length)));
+		}
+	}
 	if (logWikiId) {
 		const wiki = state.wikis.find(w => w.id === logWikiId);
 		if (wiki) {
@@ -236,6 +243,111 @@ function wikiMenu(wiki, index, count) {
 	];
 }
 
+// ---------- web wikis ----------
+
+function webHeader(links) {
+	const li = document.createElement("li");
+	li.className = "group-header web-header";
+	const collapsed = !!state.webCollapsed;
+	li.append(
+		button((collapsed ? "▸ " : "▾ ") + "Web wikis", () => api.webWikis.setCollapsed(!collapsed), {
+			className: "ghost group-toggle",
+			title: (collapsed ? "Show" : "Hide") + " your links to wikis on the web"
+		}),
+		Object.assign(document.createElement("span"), { className: "muted", textContent: links.length + (links.length === 1 ? " link" : " links") })
+	);
+	return li;
+}
+
+function webItem(link, index, count) {
+	const li = document.createElement("li");
+	li.className = "wiki web-link";
+	const icon = document.createElement("span");
+	icon.className = "web-icon";
+	icon.textContent = "↗";
+	const info = document.createElement("div");
+	info.className = "wiki-info";
+	const name = document.createElement("div");
+	name.className = "wiki-name";
+	name.textContent = link.name;
+	info.append(name);
+	if (link.description) {
+		const line = document.createElement("div");
+		line.className = "wiki-description";
+		line.textContent = link.description.replace(/\s*\n\s*/g, " ");
+		line.title = link.description;
+		info.append(line);
+	}
+	const meta = document.createElement("div");
+	meta.className = "wiki-meta";
+	meta.textContent = link.url;
+	meta.title = link.url;
+	info.append(meta);
+	const actions = document.createElement("div");
+	actions.className = "wiki-actions";
+	const more = button("⋯", () => showMenu(webMenu(link, index, count), more), { className: "ghost more", title: "More: import, edit, copy address, move, remove" });
+	actions.append(button("Open ↗", () => api.webWikis.open(link.id), { className: "primary", title: "Open " + link.url + " in the default browser" }), more);
+	li.append(icon, info, actions);
+	li.addEventListener("dblclick", () => run(() => api.webWikis.open(link.id)));
+	li.addEventListener("contextmenu", event => {
+		event.preventDefault();
+		showMenu(webMenu(link, index, count), { x: event.clientX, y: event.clientY });
+	});
+	return li;
+}
+
+function webMenu(link, index, count) {
+	const act = action => () => run(action);
+	return [
+		{ label: "Import as new wiki…", action: act(() => openCreateWizard("html", null, link)), title: "Download it and create a local wiki folder from it" },
+		{ label: "Copy address", action: act(() => api.copyText(link.url)) },
+		"-",
+		{ label: "Edit…", action: act(() => openLinkDialog(link)) },
+		"-",
+		{ label: "Move up", action: act(() => api.webWikis.move(link.id, -1)), disabled: index === 0 },
+		{ label: "Move down", action: act(() => api.webWikis.move(link.id, 1)), disabled: index === count - 1 },
+		"-",
+		{ label: "Remove…", action: act(async () => {
+			if (confirm("Remove the link \u201c" + link.name + "\u201d from TW Desk?\n\n" + link.url)) {
+				await api.webWikis.remove(link.id);
+			}
+		}) }
+	];
+}
+
+const linkForm = $("#link-form");
+let editingLinkId = null;
+
+function openLinkDialog(link) {
+	editingLinkId = link ? link.id : null;
+	linkForm.reset();
+	$("#link-error").hidden = true;
+	$("#link-dialog-title").textContent = link ? "Edit web wiki" : "Add web wiki";
+	linkForm.elements.url.value = link ? link.url : "";
+	linkForm.elements.name.value = link ? link.name : "";
+	linkForm.elements.description.value = link && link.description ? link.description : "";
+	$("#link-dialog").showModal();
+	linkForm.elements.url.focus();
+}
+
+linkForm.addEventListener("submit", async event => {
+	event.preventDefault();
+	try {
+		await api.webWikis.save({
+			id: editingLinkId,
+			url: linkForm.elements.url.value,
+			name: linkForm.elements.name.value,
+			description: linkForm.elements.description.value
+		});
+		$("#link-dialog").close();
+	} catch (e) {
+		$("#link-error").textContent = cleanError(e);
+		$("#link-error").hidden = false;
+	}
+});
+
+$("#cancel-link").addEventListener("click", () => $("#link-dialog").close());
+
 // ---------- drag and drop ----------
 
 let draggedId = null;
@@ -254,7 +366,7 @@ function dropTarget(event) {
 		return null;
 	}
 	const group = li.dataset.group || null;
-	if (li.classList.contains("wiki")) {
+	if (li.dataset.wikiId) {
 		if (li.dataset.wikiId === draggedId) {
 			return null;
 		}
@@ -266,7 +378,7 @@ function dropTarget(event) {
 		const beforeId = next && next.classList.contains("wiki") && (next.dataset.group || null) === group ? next.dataset.wikiId : null;
 		return { li, group, beforeId, mark: "drop-after" };
 	}
-	if (li.classList.contains("group-header") || li.classList.contains("group-empty")) {
+	if ((li.classList.contains("group-header") || li.classList.contains("group-empty")) && li.dataset.group !== undefined) {
 		return { li, group, beforeId: null, mark: "drop-into" };
 	}
 	return null;
@@ -324,6 +436,19 @@ document.addEventListener("dragend", () => {
 	}
 });
 
+// "groktiddlywiki.com/read" for a web address, the file name for a file
+function sourceLabel(source) {
+	if (/^https?:\/\//i.test(source)) {
+		try {
+			const url = new URL(source);
+			return (url.host + url.pathname).replace(/\/(index\.html?)?$/i, "");
+		} catch (e) {
+			return source;
+		}
+	}
+	return folderName(source);
+}
+
 // "copy of Orga · 2026-10-26 — description" (either part may be missing)
 function aboutText(wiki) {
 	const parts = [];
@@ -331,6 +456,9 @@ function aboutText(wiki) {
 		const original = state.wikis.find(w => w.id === wiki.copiedFrom.id);
 		// The original may have been renamed since
 		parts.push("copy of " + (original ? original.name : wiki.copiedFrom.name) + " · " + wiki.copiedFrom.date);
+	}
+	if (wiki.importedFrom) {
+		parts.push("imported from " + sourceLabel(wiki.importedFrom.source) + " · " + wiki.importedFrom.date);
 	}
 	if (wiki.description) {
 		parts.push(wiki.description.replace(/\s*\n\s*/g, " "));
@@ -731,10 +859,10 @@ form.addEventListener("submit", async event => {
 
 const createForm = $("#create-form");
 const createDialog = $("#create-dialog");
-const CREATE_STEPS = { source: "HTML file", copy: "What to copy", location: "Location", settings: "Settings" };
+const CREATE_STEPS = { source: "Source", copy: "What to copy", location: "Location", settings: "Settings" };
 const WIZARD_MODES = {
 	empty: { title: "New empty wiki", steps: ["location", "settings"], working: "Creating…" },
-	html: { title: "Load wiki from HTML", steps: ["source", "location", "settings"], working: "Converting…" },
+	html: { title: "Wiki from HTML file or web address", steps: ["source", "location", "settings"], working: "Converting…" },
 	copy: { title: "Copy wiki", steps: ["copy", "location", "settings"], working: "Copying…" }
 };
 const wizard = { mode: "empty", source: null, steps: [], index: 0, nameTouched: false };
@@ -753,8 +881,8 @@ function parentOf(file) {
 	return file.replace(/[\\/][^\\/]*$/, "");
 }
 
-// mode: "empty", "html" or "copy" (source: the wiki to copy)
-async function openCreateWizard(mode, source) {
+// mode: "empty", "html" or "copy" (source: the wiki to copy); link: a web wiki to import (mode "html")
+async function openCreateWizard(mode, source, link) {
 	createForm.reset();
 	wizard.mode = mode;
 	wizard.source = source || null;
@@ -780,6 +908,13 @@ async function openCreateWizard(mode, source) {
 		createForm.elements.group.value = source.group || "";
 		setFolderSuggestion(uniqueFolderName(folderName(source.path) + "-copy"));
 		createForm.elements.name.value = source.name + " (copy)";
+		wizard.nameTouched = true;
+	}
+	if (link) {
+		$("#create-title").textContent = "Import \u201c" + link.name + "\u201d";
+		createForm.elements.htmlFile.value = link.url;
+		setFolderSuggestion(folderSuggestion(link.name));
+		createForm.elements.name.value = link.name;
 		wizard.nameTouched = true;
 	}
 	showCreateStep();
@@ -817,8 +952,8 @@ function updateCreateTarget() {
 function checkCreateStep() {
 	const step = wizard.steps[wizard.index];
 	const value = name => createForm.elements[name].value.trim();
-	if (step === "source" && !/\.html?$/i.test(value("htmlFile"))) {
-		return "Choose a TiddlyWiki .html file.";
+	if (step === "source" && !/\.html?$/i.test(value("htmlFile")) && !/^https?:\/\/./i.test(value("htmlFile"))) {
+		return "Choose a TiddlyWiki .html file or enter a web address (https://…).";
 	}
 	if (step === "location") {
 		if (!value("parent")) {
@@ -848,6 +983,21 @@ function uniqueFolderName(base) {
 	return name;
 }
 
+// Folder name for a file ("mywiki") or web address ("groktiddlywiki"), without characters Windows doesn't allow
+function folderSuggestion(source) {
+	let name = source;
+	if (/^https?:\/\//i.test(source)) {
+		try {
+			name = new URL(source).host.replace(/^www\./, "").replace(/\.[a-z]+$/i, "");
+		} catch (e) {
+			name = "web-wiki";
+		}
+	} else {
+		name = source.split(/[\\/]/).pop().replace(/\.html?$/i, "");
+	}
+	return name.replace(/[\\/:*?"<>|]/g, "_").trim() || "wiki";
+}
+
 function setFolderSuggestion(name) {
 	createForm.elements.folderName.value = name;
 	if (!wizard.nameTouched) {
@@ -861,7 +1011,7 @@ $("#pick-html").addEventListener("click", () => run(async () => {
 	if (file) {
 		createForm.elements.htmlFile.value = file;
 		createForm.elements.parent.value = parentOf(file);
-		setFolderSuggestion(file.split(/[\\/]/).pop().replace(/\.html?$/i, "").replace(/[:*?"<>|]/g, "_"));
+		setFolderSuggestion(folderSuggestion(file));
 	}
 }));
 
@@ -905,6 +1055,10 @@ createForm.addEventListener("submit", async event => {
 		return;
 	}
 	if (wizard.index < wizard.steps.length - 1) {
+		// A typed file path or web address hasn't suggested a folder name yet
+		if (wizard.steps[wizard.index] === "source" && !createForm.elements.folderName.value.trim()) {
+			setFolderSuggestion(folderSuggestion(createForm.elements.htmlFile.value.trim()));
+		}
 		wizard.index++;
 		showCreateStep();
 		return;
@@ -912,7 +1066,7 @@ createForm.addEventListener("submit", async event => {
 	const next = $("#create-next");
 	const back = $("#create-back");
 	next.disabled = back.disabled = true;
-	next.textContent = WIZARD_MODES[wizard.mode].working;
+	next.textContent = wizard.mode === "html" && /^https?:/i.test(createForm.elements.htmlFile.value.trim()) ? "Downloading…" : WIZARD_MODES[wizard.mode].working;
 	try {
 		const value = name => createForm.elements[name].value.trim();
 		const id = await api.createWiki({
@@ -944,8 +1098,9 @@ createForm.addEventListener("submit", async event => {
 
 $("#new-menu").addEventListener("click", () => showMenu([
 	{ label: "Empty wiki…", action: () => run(() => openCreateWizard("empty")), title: "Create a new, empty wiki folder" },
-	{ label: "Wiki from HTML file…", action: () => run(() => openCreateWizard("html")), title: "Convert a single-file TiddlyWiki (.html) into a wiki folder" },
+	{ label: "Wiki from HTML file or web address…", action: () => run(() => openCreateWizard("html")), title: "Convert a single-file TiddlyWiki (.html file or web page) into a wiki folder" },
 	{ label: "Add existing wiki folder…", action: () => run(() => openDialog(null)), title: "A folder that contains tiddlywiki.info" },
+	{ label: "Web wiki link…", action: () => openLinkDialog(null), title: "Remember a wiki on the web: open it in the browser or import it later" },
 	"-",
 	{ label: "Group…", action: () => openGroupDialog(null), title: "A group to sort wikis into" }
 ], $("#new-menu")));

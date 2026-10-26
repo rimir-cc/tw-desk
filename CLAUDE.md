@@ -15,6 +15,8 @@ folders** – use copies (see Testing).
 - `src/tw-process.js` – entry of each TiddlyWiki utility process; args come as JSON in `TW_DESK_ARGS`.
 - `src/plugins.js` – plugin store, bundled-plugin listing, library access (standard + CPL), update checks,
   per-folder `tiddlywiki.info` plugin lists, moving wiki-stored plugins into the store.
+- `src/git.js` – git via the system `git` (no prompts: `GIT_TERMINAL_PROMPT=0`, `GCM_INTERACTIVE=never`), status from
+  `status --porcelain=v2 -z`; `src/git-ui.js` – git chips, Git tab of the bottom panel, footer line.
 - `src/preload.js` – `window.twDesk` API (contextBridge); `window.twDesk.plugins.*` for the plugins window.
 - `src/renderer.js` + `index.html` + `styles.css` – manager UI; `src/plugins-ui.js` – Plugins window
   (shares globals `$`, `api`, `run`, `cleanError`, `folderName` from renderer.js).
@@ -54,6 +56,11 @@ folders** – use copies (see Testing).
   `lastPort`. On start: fixed port, else `lastPort` if free, else the next free port from `basePort` – skipping other
   wikis' fixed and active ports and, if possible, their `lastPort`s (keeps URLs stable). Port choice is serialized
   (`portQueue`) so autostart can't hand out one port twice. Old configs' `port` is migrated to `lastPort` on load.
+- **Git checks** (`config.git`): timer every `interval` s with fetch, local-only on focus (throttled 30 s), after
+  actions/stop. Checks are queued (`gitQueue`); repos shared by several folders are checked once. Pull is fast-forward
+  only and refused while a wiki using the repo runs; nothing is done in conflict/merge/detached state. Auto-commit
+  on stop covers the wiki and its writable includes and is skipped while quitting. The Git tab re-renders on every
+  state push, so the commit field keeps its draft (`gitDrafts`) and focus.
 - `TW_DESK_USER_DATA` env var overrides the user data folder (config, store, backup) – used for testing.
 
 ## Testing

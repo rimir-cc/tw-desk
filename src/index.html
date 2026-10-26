@@ -28,13 +28,19 @@
 <section id="log-panel" hidden>
 	<div class="log-header">
 		<strong id="log-title"></strong>
+		<nav class="tabs">
+			<button type="button" class="tab" data-panel-tab="log">Log</button>
+			<button type="button" class="tab" data-panel-tab="git">Git</button>
+		</nav>
 		<span class="spacer"></span>
 		<button id="log-close" class="ghost" title="Close log">✕</button>
 	</div>
 	<pre id="log-output"></pre>
+	<div id="git-view" hidden></div>
 </section>
 
 <footer class="muted">
+	<div class="path-line" id="git-line"></div>
 	<div class="path-line">Installed in: <span id="install-dir"></span> <button class="ghost copy" data-copy="install-dir" title="Copy to clipboard">Copy</button></div>
 	<div class="path-line">Config: <span id="config-path"></span> <button class="ghost copy" data-copy="config-path" title="Copy to clipboard">Copy</button></div>
 </footer>
@@ -137,6 +143,16 @@
 			<input name="basePort" type="number" min="1024" max="65535" required>
 			<small class="muted">A wiki without a fixed port gets the port it used last time if that's free, otherwise the next free port from here on. Applies when a wiki is (re)started.</small>
 		</label>
+		<div class="field-title">Git</div>
+		<label>Check every (seconds)
+			<input name="gitInterval" type="number" min="0" step="1" required>
+			<small class="muted">0 = no automatic checks. The local status is also checked when TW Desk gets focus.</small>
+		</label>
+		<label class="inline"><input name="gitFetch" type="checkbox"> Fetch remotes during checks (to see what's new there)</label>
+		<label>Mark uncommitted changes after (hours)
+			<input name="gitStaleHours" type="number" min="1" step="1" required>
+		</label>
+		<label class="inline"><input name="gitAutoCommit" type="checkbox"> Commit automatically when a wiki is stopped</label>
 		<p id="settings-error" class="error" hidden></p>
 		<div class="actions">
 			<button type="button" id="cancel-settings">Cancel</button>
@@ -187,5 +203,6 @@
 
 <script src="renderer.js"></script>
 <script src="plugins-ui.js"></script>
+<script src="git-ui.js"></script>
 </body>
 </html>

@@ -4,7 +4,8 @@ const api = window.twDesk;
 const $ = selector => document.querySelector(selector);
 
 let state = { groups: [], wikis: [] };
-let logWikiId = null;
+let logWikiId = null; // wiki shown in the bottom panel
+let panelTab = "log";
 let editingId = null;
 let dialogIncludes = []; // [{ path (absolute), readOnly, exists }] while the Edit dialog is open
 
@@ -68,11 +69,20 @@ function render() {
 	if (logWikiId) {
 		const wiki = state.wikis.find(w => w.id === logWikiId);
 		if (wiki) {
-			$("#log-title").textContent = "Log — " + wiki.name;
+			$("#log-title").textContent = wiki.name;
+			for (const tab of document.querySelectorAll("[data-panel-tab]")) {
+				tab.classList.toggle("active", tab.dataset.panelTab === panelTab);
+			}
+			$("#log-output").hidden = panelTab !== "log";
+			$("#git-view").hidden = panelTab !== "git";
+			if (panelTab === "git") {
+				renderGitView(wiki);
+			}
 		} else {
 			hideLog();
 		}
 	}
+	renderGitFooter();
 }
 
 // group null is the "Ungrouped" section
@@ -88,7 +98,9 @@ function groupHeader(group, wikis) {
 	const meta = document.createElement("span");
 	meta.className = "muted";
 	const running = wikis.filter(w => w.status === "running").length;
-	meta.textContent = count + (count === 1 ? " wiki" : " wikis") + (collapsed && running ? " · " + running + " running" : "");
+	const attention = wikis.filter(gitNeedsAttention).length;
+	meta.textContent = count + (count === 1 ? " wiki" : " wikis") + (collapsed && running ? " · " + running + " running" : "")
+		+ (collapsed && attention ? " · " + attention + " need git attention" : "");
 	const spacer = document.createElement("span");
 	spacer.className = "spacer";
 	li.append(toggle, meta, spacer);
@@ -116,7 +128,11 @@ function wikiItem(wiki, index, count) {
 	info.className = "wiki-info";
 	const name = document.createElement("div");
 	name.className = "wiki-name";
-	name.textContent = wiki.name;
+	name.append(wiki.name);
+	const chip = gitChip(wiki);
+	if (chip) {
+		name.append(" ", chip);
+	}
 	const meta = document.createElement("div");
 	meta.className = "wiki-meta";
 	meta.textContent = STATUS_TEXT[wiki.status] + " · " + portText(wiki) + (wiki.autostart ? " · autostart" : "") + " · " + wiki.path;
@@ -139,7 +155,12 @@ function wikiItem(wiki, index, count) {
 		line.className = "wiki-includes";
 		line.append("includes:");
 		for (const include of wiki.includes) {
-			line.append(includeChip(folderName(include.resolved) + (include.readOnly ? " (read-only)" : ""), include));
+			const chip = includeChip(folderName(include.resolved) + (include.readOnly ? " (read-only)" : ""), include);
+			const dot = include.exists ? gitDot(include.resolved) : null;
+			if (dot) {
+				chip.append(" ", dot);
+			}
+			line.append(chip);
 		}
 		info.append(line);
 	}
@@ -153,7 +174,7 @@ function wikiItem(wiki, index, count) {
 		button("Open", () => api.openWiki(wiki.id, false), { className: "primary", title: "Open in a TW Desk window (starts the server if needed)" }),
 		button("Browser", () => api.openWiki(wiki.id, true), { title: wiki.url ? "Open " + wiki.url + " in the default browser" : "Open in the default browser (starts the server if needed)" }),
 		button("Folder", () => api.showFolder(wiki.id), { title: "Show the wiki folder in Explorer" }),
-		button("Log", () => showLog(wiki.id)),
+		button("Log", () => showPanel(wiki.id, "log")),
 		button("Edit", () => openDialog(wiki), { disabled: running || busy, title: running || busy ? "Stop the wiki to edit it" : "Edit" }),
 		button("▲", () => api.moveWiki(wiki.id, -1), { disabled: index === 0, className: "ghost", title: "Move up" }),
 		button("▼", () => api.moveWiki(wiki.id, 1), { disabled: index === count - 1, className: "ghost", title: "Move down" }),
@@ -281,6 +302,11 @@ const settingsForm = $("#settings-form");
 
 $("#show-settings").addEventListener("click", () => {
 	settingsForm.elements.basePort.value = state.basePort;
+	const git = state.git.settings;
+	settingsForm.elements.gitInterval.value = git.interval;
+	settingsForm.elements.gitFetch.checked = git.fetch;
+	settingsForm.elements.gitStaleHours.value = git.staleHours;
+	settingsForm.elements.gitAutoCommit.checked = git.autoCommitOnStop;
 	$("#settings-error").hidden = true;
 	$("#settings-dialog").showModal();
 });
@@ -288,7 +314,14 @@ $("#show-settings").addEventListener("click", () => {
 settingsForm.addEventListener("submit", async event => {
 	event.preventDefault();
 	try {
-		await api.saveSettings({ basePort: Number(settingsForm.elements.basePort.value) });
+		const fields = settingsForm.elements;
+		await api.saveSettings({
+			basePort: Number(fields.basePort.value),
+			gitInterval: Number(fields.gitInterval.value),
+			gitFetch: fields.gitFetch.checked,
+			gitStaleHours: Number(fields.gitStaleHours.value),
+			gitAutoCommit: fields.gitAutoCommit.checked
+		});
 		$("#settings-dialog").close();
 	} catch (e) {
 		$("#settings-error").textContent = cleanError(e);
@@ -300,13 +333,18 @@ $("#cancel-settings").addEventListener("click", () => $("#settings-dialog").clos
 
 // ---------- log panel ----------
 
-async function showLog(id) {
+async function showPanel(id, tab) {
 	logWikiId = id;
+	panelTab = tab;
 	$("#log-panel").hidden = false;
 	const output = $("#log-output");
 	output.textContent = (await api.getLogs(id)).join("\n");
-	output.scrollTop = output.scrollHeight;
 	render();
+	output.scrollTop = output.scrollHeight;
+}
+
+for (const tab of document.querySelectorAll("[data-panel-tab]")) {
+	tab.addEventListener("click", () => run(() => showPanel(logWikiId, tab.dataset.panelTab)));
 }
 
 function hideLog() {
@@ -639,5 +677,10 @@ function applyState(newState) {
 
 api.onState(applyState);
 api.getState().then(applyState);
-// Pick up changes made to tiddlywiki.info files outside TW Desk
-window.addEventListener("focus", () => api.getState().then(applyState));
+// Pick up changes made outside TW Desk (tiddlywiki.info files, git)
+window.addEventListener("focus", () => {
+	api.getState().then(applyState);
+	api.git.checkOnFocus();
+});
+// Keeps relative times ("checked 2 min ago") current
+setInterval(render, 60000);

@@ -142,6 +142,20 @@ button.primary { background: var(--accent); border-color: var(--accent); color: 
 button.ghost { border-color: transparent; background: transparent; }
 button.danger:hover:not(:disabled) { border-color: var(--error); color: var(--error); }
 
+.git-chip { padding: 0 7px; margin-left: 4px; border-radius: 10px; font-size: 11px; font-weight: normal; color: var(--muted); vertical-align: 1px; }
+.git-chip.warn { color: var(--starting); border-color: var(--starting); }
+.git-chip.bad { color: var(--error); border-color: var(--error); }
+.git-dot { display: inline-block; width: 7px; height: 7px; border-radius: 50%; background: var(--stopped); vertical-align: 1px; }
+.git-dot.warn { background: var(--starting); }
+.git-dot.bad { background: var(--error); }
+#git-line { gap: 4px; }
+#git-view { flex: 1; overflow: auto; padding: 8px 16px; }
+.git-repo { padding: 8px 0; border-bottom: 1px solid var(--border); display: flex; flex-direction: column; gap: 3px; }
+.git-repo:last-child { border-bottom: none; }
+.git-repo-title { display: flex; gap: 8px; align-items: baseline; flex-wrap: wrap; }
+.git-files { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.git-actions { display: flex; gap: 6px; flex-wrap: wrap; margin-top: 4px; }
+.log-header .tab { padding: 1px 10px; font-size: 12px; }
 #log-panel { height: 38vh; display: flex; flex-direction: column; border-top: 1px solid var(--border); background: var(--panel); }
 .log-header { padding: 6px 16px; }
 #log-output {

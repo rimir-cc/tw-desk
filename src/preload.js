@@ -6,6 +6,11 @@ contextBridge.exposeInMainWorld("twDesk", {
 	getState: () => ipcRenderer.invoke("get-state"),
 	getLogs: id => ipcRenderer.invoke("get-logs", id),
 	saveSettings: settings => ipcRenderer.invoke("save-settings", settings),
+	git: {
+		action: (action, folder, arg) => ipcRenderer.invoke("git-action", action, folder, arg),
+		checkOnFocus: () => ipcRenderer.invoke("git-check-focus"),
+		checkNow: () => ipcRenderer.invoke("git-check-now")
+	},
 	pickFolder: title => ipcRenderer.invoke("pick-folder", title),
 	pickFile: (title, filters) => ipcRenderer.invoke("pick-file", title, filters),
 	saveWiki: wiki => ipcRenderer.invoke("save-wiki", wiki),

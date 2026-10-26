@@ -6,6 +6,7 @@ const net = require("net");
 const path = require("path");
 const crypto = require("crypto");
 const plugins = require("./plugins");
+const git = require("./git");
 
 const DEFAULT_BASE_PORT = 8090;
 const MAX_LOG_LINES = 500;
@@ -19,6 +20,7 @@ let managerWindow = null;
 let config = { basePort: DEFAULT_BASE_PORT, groups: [], wikis: [] };
 const servers = new Map(); // wiki id -> { child, status, logs, error }
 const wikiWindows = new Map(); // wiki id -> BrowserWindow
+let quitting = false;
 
 // ---------- config ----------
 
@@ -162,6 +164,7 @@ function snapshot() {
 		configPath: configPath(),
 		installDir: app.isPackaged ? path.dirname(process.execPath) : app.getAppPath(),
 		basePort: config.basePort,
+		git: gitSnapshot(),
 		groups: config.groups,
 		ungroupedCollapsed: !!config.ungroupedCollapsed,
 		wikis: config.wikis.map(w => Object.assign({}, w, { group: groupOf(w) }, serverState(w.id), { port: activePort(w.id), url: wikiUrl(w.id) }, readIncludes(w.path)))
@@ -366,6 +369,10 @@ async function startWiki(id) {
 			win.close();
 		}
 		pushState();
+		// Not while quitting: the app could exit in the middle of a commit
+		if (!quitting) {
+			afterStop(wiki);
+		}
 	});
 }
 
@@ -440,6 +447,207 @@ async function openWiki(id, external) {
 	win.on("closed", () => wikiWindows.delete(id));
 	wikiWindows.set(id, win);
 	win.loadURL(url);
+}
+
+// ---------- git ----------
+
+const GIT_DEFAULTS = { interval: 600, fetch: true, staleHours: 24, autoCommitOnStop: false };
+const FOCUS_CHECK_GAP = 30000;
+
+const gitState = { version: undefined, checking: false, checkedAt: null };
+const gitFolderStatus = new Map(); // lower-cased folder -> status (see rootStatus) or { repo: false } or { error }
+const gitRemoteInfo = new Map(); // lower-cased repo root -> { fetchedAt, fetchError }
+let gitQueue = Promise.resolve();
+let gitTimer = null;
+let lastLocalCheck = 0;
+
+function folderKey(folder) {
+	return path.resolve(folder).toLowerCase();
+}
+
+function gitSettings() {
+	return Object.assign({}, GIT_DEFAULTS, config.git);
+}
+
+function gitSnapshot() {
+	return {
+		available: gitState.version === undefined ? null : !!gitState.version,
+		version: gitState.version || null,
+		checking: gitState.checking,
+		checkedAt: gitState.checkedAt,
+		settings: gitSettings(),
+		folders: Object.fromEntries(gitFolderStatus)
+	};
+}
+
+// The managed wikis and the folders they include (when those exist)
+function gitFolders() {
+	const folders = new Map();
+	for (const wiki of config.wikis) {
+		folders.set(folderKey(wiki.path), path.resolve(wiki.path));
+		for (const include of readIncludes(wiki.path).includes) {
+			if (include.exists) {
+				folders.set(folderKey(include.resolved), include.resolved);
+			}
+		}
+	}
+	return [...folders.values()];
+}
+
+async function fetchRoot(root) {
+	const info = gitRemoteInfo.get(folderKey(root)) || {};
+	try {
+		await git.fetch(root);
+		info.fetchedAt = Date.now();
+		info.fetchError = null;
+	} catch (e) {
+		info.fetchError = e.message;
+	}
+	gitRemoteInfo.set(folderKey(root), info);
+}
+
+async function rootStatus(root, fetchRemote) {
+	let status = await git.status(root);
+	if (fetchRemote && status.remotes.length) {
+		await fetchRoot(root);
+		status = await git.status(root);
+	}
+	return Object.assign({ repo: true, root }, status, gitRemoteInfo.get(folderKey(root)) || {});
+}
+
+// Checks run one after another; options: { fetch, folders } (folders: only these, default all)
+function checkGit(options = {}) {
+	gitQueue = gitQueue.then(() => runGitCheck(options)).catch(e => console.error("git check failed:", e));
+	return gitQueue;
+}
+
+async function runGitCheck(options) {
+	if (gitState.version === undefined) {
+		gitState.version = await git.version();
+	}
+	if (!gitState.version) {
+		pushState();
+		return;
+	}
+	const all = !options.folders;
+	const folders = options.folders || gitFolders();
+	gitState.checking = true;
+	pushState();
+	const roots = new Map(); // a repository shared by several folders is checked once
+	for (const folder of folders) {
+		let entry;
+		try {
+			const root = await git.repoRoot(folder);
+			if (!root) {
+				entry = { repo: false };
+			} else {
+				if (!roots.has(folderKey(root))) {
+					roots.set(folderKey(root), await rootStatus(root, options.fetch));
+				}
+				entry = roots.get(folderKey(root));
+			}
+		} catch (e) {
+			entry = { repo: true, error: e.message };
+		}
+		gitFolderStatus.set(folderKey(folder), entry);
+	}
+	if (all) {
+		const known = new Set(folders.map(folderKey));
+		for (const key of gitFolderStatus.keys()) {
+			if (!known.has(key)) {
+				gitFolderStatus.delete(key);
+			}
+		}
+		gitState.checkedAt = Date.now();
+	}
+	lastLocalCheck = Date.now();
+	gitState.checking = false;
+	pushState();
+}
+
+function scheduleGitChecks() {
+	clearInterval(gitTimer);
+	const settings = gitSettings();
+	if (settings.interval > 0) {
+		gitTimer = setInterval(() => checkGit({ fetch: settings.fetch }), settings.interval * 1000);
+	}
+}
+
+// Wikis whose own folder or included folders lie inside the repository
+function wikisUsingRepo(root) {
+	const inside = folder => {
+		const relative = path.relative(root, path.resolve(folder));
+		return !relative || (!relative.startsWith("..") && !path.isAbsolute(relative));
+	};
+	return config.wikis.filter(w => inside(w.path) || readIncludes(w.path).includes.some(i => inside(i.resolved)));
+}
+
+async function gitAction(action, folder, arg) {
+	const resolved = path.resolve(folder);
+	if (!gitFolders().some(f => folderKey(f) === folderKey(resolved))) {
+		throw new Error("Unknown wiki folder: " + folder);
+	}
+	if (action === "open") {
+		await shell.openPath(resolved);
+		return;
+	}
+	if (action === "init") {
+		if (await git.repoRoot(resolved)) {
+			throw new Error("This folder is already in a git repository.");
+		}
+		await git.init(resolved);
+	} else {
+		const root = await git.repoRoot(resolved);
+		if (!root) {
+			throw new Error("Not a git repository: " + resolved);
+		}
+		if (action === "commit") {
+			await git.commit(root, arg);
+		} else if (action === "push") {
+			await git.push(root);
+		} else if (action === "pull") {
+			// A running server would write its in-memory tiddlers over the pulled files
+			const running = wikisUsingRepo(root).filter(w => ["running", "starting"].includes(serverState(w.id).status));
+			if (running.length) {
+				throw new Error("Stop " + running.map(w => w.name).join(", ") + " before pulling.");
+			}
+			await git.pull(root);
+		} else if (action === "fetch") {
+			await fetchRoot(root);
+			const info = gitRemoteInfo.get(folderKey(root));
+			if (info.fetchError) {
+				throw new Error(info.fetchError);
+			}
+		} else if (action === "add-remote") {
+			await git.addRemote(root, arg);
+		} else {
+			throw new Error("Unknown git action " + action);
+		}
+	}
+	await checkGit({ fetch: false });
+}
+
+// Auto-commit (if enabled) the wiki's folder and its writable includes, then refresh their status
+async function afterStop(wiki) {
+	const folders = [path.resolve(wiki.path)].concat(readIncludes(wiki.path).includes.filter(i => i.exists).map(i => i.resolved));
+	if (gitState.version && gitSettings().autoCommitOnStop) {
+		const writable = [path.resolve(wiki.path)].concat(readIncludes(wiki.path).includes.filter(i => i.exists && !i.readOnly).map(i => i.resolved));
+		const done = new Set();
+		for (const folder of writable) {
+			try {
+				const root = await git.repoRoot(folder);
+				if (root && !done.has(folderKey(root))) {
+					done.add(folderKey(root));
+					if (await git.commit(root)) {
+						appendLog(wiki.id, "Auto-committed changes in " + root);
+					}
+				}
+			} catch (e) {
+				appendLog(wiki.id, "Auto-commit in " + folder + " failed: " + e.message);
+			}
+		}
+	}
+	await checkGit({ folders });
 }
 
 // ---------- creating wikis ----------
@@ -535,6 +743,7 @@ async function createWiki(input) {
 	config.wikis.push(wiki);
 	saveConfig();
 	pushState();
+	checkGit({ fetch: false });
 	return wiki.id;
 }
 
@@ -549,10 +758,32 @@ ipcMain.handle("save-settings", (event, input) => {
 	if (!validPort(basePort)) {
 		throw new Error("The start port must be a number between 1024 and 65535.");
 	}
+	const interval = Number(input.gitInterval);
+	if (!Number.isInteger(interval) || interval < 0 || (interval > 0 && interval < 30)) {
+		throw new Error("The git check interval must be 0 (off) or at least 30 seconds.");
+	}
+	const staleHours = Number(input.gitStaleHours);
+	if (!(staleHours > 0)) {
+		throw new Error("The hours for old uncommitted changes must be a positive number.");
+	}
 	config.basePort = basePort;
+	config.git = { interval, fetch: !!input.gitFetch, staleHours, autoCommitOnStop: !!input.gitAutoCommit };
 	saveConfig();
+	scheduleGitChecks();
 	pushState();
 });
+
+ipcMain.handle("git-action", (event, action, folder, arg) => gitAction(action, folder, arg));
+
+// Local status only (no fetch), at most every 30 seconds
+ipcMain.handle("git-check-focus", () => {
+	if (Date.now() - lastLocalCheck > FOCUS_CHECK_GAP) {
+		lastLocalCheck = Date.now();
+		checkGit({ fetch: false });
+	}
+});
+
+ipcMain.handle("git-check-now", () => checkGit({ fetch: gitSettings().fetch }));
 
 ipcMain.handle("pick-folder", async (event, title) => {
 	const result = await dialog.showOpenDialog(managerWindow, { title, properties: ["openDirectory", "createDirectory"] });
@@ -577,10 +808,14 @@ ipcMain.handle("save-wiki", (event, input) => {
 	}
 	saveConfig();
 	pushState();
+	checkGit({ fetch: false });
 	return wiki.id;
 });
 
-ipcMain.handle("save-includes", (event, id, entries) => saveIncludes(id, entries));
+ipcMain.handle("save-includes", (event, id, entries) => {
+	saveIncludes(id, entries);
+	checkGit({ fetch: false });
+});
 
 // ---------- plugins ----------
 
@@ -834,9 +1069,12 @@ if (!app.requestSingleInstanceLock()) {
 				startWiki(wiki.id);
 			}
 		}
+		scheduleGitChecks();
+		checkGit({ fetch: gitSettings().fetch });
 	});
 
 	app.on("before-quit", () => {
+		quitting = true;
 		for (const id of servers.keys()) {
 			stopWiki(id);
 		}

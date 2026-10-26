@@ -14,12 +14,14 @@
 	<button id="show-includes" title="Which folders are included by which wikis">Includes</button>
 	<button id="show-plugins" title="Shared plugin store, libraries and the plugins of each wiki">Plugins</button>
 	<button id="add-group" title="Add a group to sort wikis into">+ Add group</button>
-	<button id="add-wiki" class="primary">+ Add wiki</button>
+	<button id="new-empty-wiki" title="Create a new, empty wiki folder">+ Empty wiki</button>
+	<button id="new-html-wiki" title="Convert a single-file TiddlyWiki (.html) into a wiki folder">+ Load from HTML</button>
+	<button id="add-wiki" class="primary" title="Add an existing wiki folder">+ Add wiki</button>
 </header>
 
 <main>
 	<ul id="wiki-list"></ul>
-	<p id="empty-hint" class="muted" hidden>No wikis yet. Use “+ Add wiki” to add an existing wiki folder or create a new one.</p>
+	<p id="empty-hint" class="muted" hidden>No wikis yet. Use “+ Add wiki” to add an existing wiki folder, “+ Empty wiki” to create a new one, or “+ Load from HTML” to convert a single-file wiki.</p>
 </main>
 
 <section id="log-panel" hidden>
@@ -39,10 +41,6 @@
 <dialog id="wiki-dialog">
 	<form id="wiki-form" method="dialog">
 		<h2 id="dialog-title">Add wiki</h2>
-		<fieldset id="mode-fields">
-			<label><input type="radio" name="mode" value="existing" checked> Existing wiki folder</label>
-			<label><input type="radio" name="mode" value="new"> Create new wiki</label>
-		</fieldset>
 		<label>Name
 			<input name="name" required>
 		</label>
@@ -51,13 +49,7 @@
 				<input name="path" required>
 				<button type="button" id="pick-path">Browse…</button>
 			</span>
-			<small id="path-hint" class="muted"></small>
-		</label>
-		<label id="shared-field" hidden>Include shared wiki (optional)
-			<span class="row">
-				<input name="sharedPath" placeholder="e.g. C:\…\wikis\_shared">
-				<button type="button" id="pick-shared">Browse…</button>
-			</span>
+			<small class="muted">A folder containing tiddlywiki.info.</small>
 		</label>
 		<label>Port
 			<input name="port" type="number" min="1024" max="65535" required>
@@ -75,6 +67,62 @@
 		<div class="actions">
 			<button type="button" id="cancel-dialog">Cancel</button>
 			<button type="submit" class="primary" id="save-dialog">Save</button>
+		</div>
+	</form>
+</dialog>
+
+<dialog id="create-dialog">
+	<form id="create-form" method="dialog" novalidate>
+		<h2 id="create-title">New empty wiki</h2>
+		<ol id="create-steps" class="steps"></ol>
+		<section data-step="source">
+			<label>HTML file
+				<span class="row">
+					<input name="htmlFile" placeholder="e.g. C:\…\mywiki.html">
+					<button type="button" id="pick-html">Browse…</button>
+				</span>
+			</label>
+			<p class="muted small">The file is converted into a wiki folder; the HTML file itself is not changed.
+				Plugins from the official library are referenced by name, so the wiki uses the versions bundled with
+				<span class="tw-version-name"></span>. Other plugins are kept inside the wiki; you can move them to the store in Plugins.</p>
+		</section>
+		<section data-step="location">
+			<label>Create in
+				<span class="row">
+					<input name="parent" placeholder="e.g. C:\…\wikis">
+					<button type="button" id="pick-parent">Browse…</button>
+				</span>
+			</label>
+			<label>Folder name
+				<input name="folderName">
+			</label>
+			<p id="create-target" class="muted small"></p>
+		</section>
+		<section data-step="settings">
+			<label>Name
+				<input name="name">
+			</label>
+			<label>Port
+				<input name="port" type="number" min="1024" max="65535">
+			</label>
+			<label id="create-group-field">Group
+				<select name="group"></select>
+			</label>
+			<label>Include shared wiki (optional)
+				<span class="row">
+					<input name="sharedPath" placeholder="e.g. C:\…\wikis\_shared">
+					<button type="button" id="pick-create-shared">Browse…</button>
+				</span>
+			</label>
+			<label class="inline"><input name="autostart" type="checkbox"> Start when TW Desk starts</label>
+			<label class="inline"><input name="openAfter" type="checkbox" checked> Open the wiki when it's created</label>
+		</section>
+		<p id="create-error" class="error" hidden></p>
+		<div class="actions">
+			<button type="button" id="create-cancel">Cancel</button>
+			<span class="spacer"></span>
+			<button type="button" id="create-back">Back</button>
+			<button type="submit" class="primary" id="create-next">Next</button>
 		</div>
 	</form>
 </dialog>

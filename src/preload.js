@@ -7,7 +7,9 @@ contextBridge.exposeInMainWorld("twDesk", {
 	getLogs: id => ipcRenderer.invoke("get-logs", id),
 	suggestPort: () => ipcRenderer.invoke("suggest-port"),
 	pickFolder: title => ipcRenderer.invoke("pick-folder", title),
+	pickFile: (title, filters) => ipcRenderer.invoke("pick-file", title, filters),
 	saveWiki: wiki => ipcRenderer.invoke("save-wiki", wiki),
+	createWiki: input => ipcRenderer.invoke("create-wiki", input),
 	removeWiki: id => ipcRenderer.invoke("remove-wiki", id),
 	saveIncludes: (id, entries) => ipcRenderer.invoke("save-includes", id, entries),
 	plugins: {

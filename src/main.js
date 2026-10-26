@@ -81,6 +81,14 @@ function nextFreeConfigPort() {
 }
 
 function validateWiki(wiki, ignoreId) {
+	validateSettings(wiki, ignoreId);
+	if (!fs.existsSync(path.join(wiki.path, "tiddlywiki.info"))) {
+		throw new Error("No tiddlywiki.info in " + wiki.path);
+	}
+}
+
+// Everything except the folder, which may not exist yet when a wiki is created
+function validateSettings(wiki, ignoreId) {
 	if (!wiki.name || !wiki.name.trim()) {
 		throw new Error("Name is required.");
 	}
@@ -91,9 +99,27 @@ function validateWiki(wiki, ignoreId) {
 	if (clash) {
 		throw new Error("Port " + wiki.port + " is already used by \"" + clash.name + "\".");
 	}
-	if (!fs.existsSync(path.join(wiki.path, "tiddlywiki.info"))) {
-		throw new Error("No tiddlywiki.info in " + wiki.path);
+	const samePath = config.wikis.find(w => w.id !== ignoreId && path.resolve(w.path).toLowerCase() === path.resolve(wiki.path).toLowerCase());
+	if (samePath) {
+		throw new Error("This folder is already in TW Desk as \"" + samePath.name + "\".");
 	}
+}
+
+function wikiFromInput(input) {
+	const wiki = {
+		id: input.id || crypto.randomUUID(),
+		name: (input.name || "").trim(),
+		path: path.resolve(input.path || ""),
+		port: Number(input.port),
+		autostart: !!input.autostart
+	};
+	if (input.group) {
+		if (!config.groups.some(g => g.id === input.group)) {
+			throw new Error("Unknown group " + input.group);
+		}
+		wiki.group = input.group;
+	}
+	return wiki;
 }
 
 // ---------- state sent to the UI ----------
@@ -344,27 +370,98 @@ async function openWiki(id, external) {
 
 // ---------- creating wikis ----------
 
-async function initWiki(folder, sharedFolder) {
-	fs.mkdirSync(folder, { recursive: true });
-	if (fs.readdirSync(folder).length) {
-		throw new Error("The folder for a new wiki must be empty: " + folder);
-	}
-	const child = runTiddlyWiki([folder, "--init", "server"], "TiddlyWiki init");
+// Runs a one-off TiddlyWiki command line; fails with TiddlyWiki's output if it exits with an error
+async function runTiddlyWikiCommand(args, serviceName) {
+	const child = runTiddlyWiki(args, serviceName);
 	let output = "";
 	child.stdout.on("data", data => (output += data));
 	child.stderr.on("data", data => (output += data));
 	const code = await new Promise(resolve => child.once("exit", resolve));
-	if (code !== 0 || !fs.existsSync(path.join(folder, "tiddlywiki.info"))) {
-		throw new Error("tiddlywiki --init failed (exit code " + code + "):\n" + output);
+	if (code !== 0) {
+		throw new Error("TiddlyWiki failed (exit code " + code + "):\n" + output.replace(/\x1b\[[0-9;]*m/g, "").trim());
 	}
-	fs.mkdirSync(path.join(folder, "tiddlers"), { recursive: true });
-	if (sharedFolder) {
-		const infoPath = path.join(folder, "tiddlywiki.info");
-		const info = JSON.parse(fs.readFileSync(infoPath, "utf8"));
-		const relative = path.relative(folder, sharedFolder).split(path.sep).join("/");
-		info.includeWikis = [{ path: relative, "read-only": false }];
-		fs.writeFileSync(infoPath, JSON.stringify(info, null, 4));
+}
+
+// State tiddlers of the HTML wiki that make no sense in a folder wiki
+const HTML_SKIP_FILTER = "[all[tiddlers]] -[[$:/StoryList]] -[[$:/HistoryList]] -[[$:/isEncrypted]] -[[$:/status/RequireReloadDueToPluginChange]] -[prefix[$:/temp/]]";
+
+// --savewikifolder references plugins from the official library by name (so the bundled versions are used) and,
+// with explodePlugins=no, saves other plugins as single files in tiddlers/, where the Plugins window can move them to the store.
+async function convertHtmlWiki(htmlFile, folder) {
+	const html = fs.readFileSync(htmlFile, "utf8");
+	if (html.includes("id=\"encryptedStoreArea\"")) {
+		throw new Error("This wiki is password-protected and can't be converted. Open it in a browser, clear the password (Tools → Set password / Saving), save it, and try again.");
 	}
+	// TiddlyWiki 5.2+ keeps tiddlers in JSON script blocks, older versions in a storeArea div
+	if (!html.includes("tiddlywiki-tiddler-store") && !html.includes("id=\"storeArea\"")) {
+		throw new Error("This doesn't look like a TiddlyWiki file: " + htmlFile);
+	}
+	await runTiddlyWikiCommand(["--load", htmlFile, "--savewikifolder", folder, HTML_SKIP_FILTER, "explodePlugins=no"], "TiddlyWiki convert");
+}
+
+// Creates a new wiki folder (empty, or converted from a single-file HTML wiki) and adds it to the list
+async function createWiki(input) {
+	const folderName = (input.folderName || "").trim();
+	if (!folderName || /[\\/:*?"<>|]/.test(folderName) || /^\.+$/.test(folderName)) {
+		throw new Error("Please enter a valid folder name (without \\ / : * ? \" < > |).");
+	}
+	if (!input.parent || !fs.existsSync(path.resolve(input.parent))) {
+		throw new Error("The folder to create the wiki in doesn't exist: " + (input.parent || "(none)"));
+	}
+	const htmlFile = input.htmlFile ? path.resolve(input.htmlFile) : null;
+	if (htmlFile && !fs.existsSync(htmlFile)) {
+		throw new Error("HTML file not found: " + htmlFile);
+	}
+	const folder = path.join(path.resolve(input.parent), folderName);
+	const wiki = wikiFromInput(Object.assign({}, input, { id: null, path: folder }));
+	validateSettings(wiki, null);
+	const existed = fs.existsSync(folder);
+	if (existed && fs.readdirSync(folder).length) {
+		throw new Error("The folder already exists and isn't empty: " + folder);
+	}
+	try {
+		if (htmlFile) {
+			await convertHtmlWiki(htmlFile, folder);
+		} else {
+			fs.mkdirSync(folder, { recursive: true });
+			await runTiddlyWikiCommand([folder, "--init", "server"], "TiddlyWiki init");
+		}
+		fs.mkdirSync(path.join(folder, "tiddlers"), { recursive: true });
+		const info = JSON.parse(fs.readFileSync(infoPath(folder), "utf8"));
+		// Needed to serve and save the wiki; a converted HTML wiki doesn't list them
+		info.plugins = info.plugins || [];
+		for (const plugin of ["tiddlywiki/tiddlyweb", "tiddlywiki/filesystem"]) {
+			if (!info.plugins.includes(plugin)) {
+				info.plugins.push(plugin);
+			}
+		}
+		if (input.sharedPath) {
+			const shared = path.resolve(input.sharedPath);
+			if (!fs.existsSync(infoPath(shared))) {
+				throw new Error("Not a wiki folder (no tiddlywiki.info): " + shared);
+			}
+			let relative = path.relative(folder, shared);
+			if (path.isAbsolute(relative)) {
+				relative = shared;
+			}
+			info.includeWikis = [{ path: relative.split(path.sep).join("/"), "read-only": false }];
+		}
+		fs.writeFileSync(infoPath(folder), JSON.stringify(info, null, 4));
+	} catch (e) {
+		// Only remove what this call created
+		if (existed) {
+			for (const entry of fs.readdirSync(folder)) {
+				fs.rmSync(path.join(folder, entry), { recursive: true, force: true });
+			}
+		} else {
+			fs.rmSync(folder, { recursive: true, force: true });
+		}
+		throw e;
+	}
+	config.wikis.push(wiki);
+	saveConfig();
+	pushState();
+	return wiki.id;
 }
 
 // ---------- IPC ----------
@@ -380,23 +477,15 @@ ipcMain.handle("pick-folder", async (event, title) => {
 	return result.canceled ? null : result.filePaths[0];
 });
 
-ipcMain.handle("save-wiki", async (event, input) => {
-	const wiki = {
-		id: input.id || crypto.randomUUID(),
-		name: (input.name || "").trim(),
-		path: path.resolve(input.path || ""),
-		port: Number(input.port),
-		autostart: !!input.autostart
-	};
-	if (input.group) {
-		if (!config.groups.some(g => g.id === input.group)) {
-			throw new Error("Unknown group " + input.group);
-		}
-		wiki.group = input.group;
-	}
-	if (!input.id && input.createNew) {
-		await initWiki(wiki.path, input.sharedPath ? path.resolve(input.sharedPath) : null);
-	}
+ipcMain.handle("pick-file", async (event, title, filters) => {
+	const result = await dialog.showOpenDialog(managerWindow, { title, properties: ["openFile"], filters });
+	return result.canceled ? null : result.filePaths[0];
+});
+
+ipcMain.handle("create-wiki", (event, input) => createWiki(input));
+
+ipcMain.handle("save-wiki", (event, input) => {
+	const wiki = wikiFromInput(input);
 	validateWiki(wiki, input.id);
 	const index = config.wikis.findIndex(w => w.id === wiki.id);
 	if (index === -1) {

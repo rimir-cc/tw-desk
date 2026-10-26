@@ -299,37 +299,21 @@ $("#log-close").addEventListener("click", hideLog);
 const form = $("#wiki-form");
 const dialog = $("#wiki-dialog");
 
-function mode() {
-	return form.elements.mode.value;
-}
-
-function updateModeFields() {
-	const creating = !editingId && mode() === "new";
-	$("#shared-field").hidden = !creating;
-	$("#path-hint").textContent = creating
-		? "An empty (or not yet existing) folder; a new server wiki is created there."
-		: "A folder containing tiddlywiki.info.";
-}
-
 async function openDialog(wiki) {
 	editingId = wiki ? wiki.id : null;
 	form.reset();
 	$("#form-error").hidden = true;
-	$("#dialog-title").textContent = wiki ? "Edit wiki" : "Add wiki";
-	$("#mode-fields").hidden = !!wiki;
+	$("#dialog-title").textContent = wiki ? "Edit wiki" : "Add existing wiki";
 	form.elements.name.value = wiki ? wiki.name : "";
 	form.elements.path.value = wiki ? wiki.path : "";
 	form.elements.port.value = wiki ? wiki.port : await api.suggestPort();
 	form.elements.autostart.checked = wiki ? !!wiki.autostart : false;
-	const groupSelect = form.elements.group;
-	groupSelect.replaceChildren(new Option("— none —", ""), ...state.groups.map(g => new Option(g.name, g.id)));
-	groupSelect.value = wiki && wiki.group ? wiki.group : "";
+	groupOptions(form.elements.group, wiki && wiki.group);
 	$("#group-field").hidden = !state.groups.length;
 	// Includes are edited for existing wikis only; a new wiki gets its shared include via "Create new wiki"
 	dialogIncludes = wiki ? wiki.includes.map(i => ({ path: i.resolved, readOnly: i.readOnly, exists: i.exists })) : [];
 	$("#includes-field").hidden = !wiki;
 	renderIncludesEditor();
-	updateModeFields();
 	dialog.showModal();
 	form.elements.name.focus();
 }
@@ -377,26 +361,13 @@ $("#add-include").addEventListener("click", () => run(async () => {
 	}
 }));
 
-form.addEventListener("change", event => {
-	if (event.target.name === "mode") {
-		updateModeFields();
-	}
-});
-
 $("#pick-path").addEventListener("click", () => run(async () => {
-	const folder = await api.pickFolder(mode() === "new" && !editingId ? "Folder for the new wiki" : "Wiki folder");
+	const folder = await api.pickFolder("Wiki folder");
 	if (folder) {
 		form.elements.path.value = folder;
 		if (!form.elements.name.value) {
 			form.elements.name.value = folder.split(/[\\/]/).pop();
 		}
-	}
-}));
-
-$("#pick-shared").addEventListener("click", () => run(async () => {
-	const folder = await api.pickFolder("Shared wiki to include");
-	if (folder) {
-		form.elements.sharedPath.value = folder;
 	}
 }));
 
@@ -413,9 +384,7 @@ form.addEventListener("submit", async event => {
 			path: form.elements.path.value.trim(),
 			port: Number(form.elements.port.value),
 			autostart: form.elements.autostart.checked,
-			group: form.elements.group.value || null,
-			createNew: !editingId && mode() === "new",
-			sharedPath: form.elements.sharedPath.value.trim()
+			group: form.elements.group.value || null
 		});
 		if (editingId) {
 			await api.saveIncludes(editingId, dialogIncludes.map(i => ({ path: i.path, readOnly: i.readOnly })));
@@ -430,6 +399,189 @@ form.addEventListener("submit", async event => {
 });
 
 $("#add-wiki").addEventListener("click", () => run(() => openDialog(null)));
+
+// ---------- create wizard (empty wiki / load from HTML) ----------
+
+const createForm = $("#create-form");
+const createDialog = $("#create-dialog");
+const CREATE_STEPS = { source: "HTML file", location: "Location", settings: "Settings" };
+const wizard = { steps: [], index: 0, nameTouched: false };
+
+function groupOptions(select, selected) {
+	select.replaceChildren(new Option("— none —", ""), ...state.groups.map(g => new Option(g.name, g.id)));
+	select.value = selected || "";
+}
+
+function joinPath(parent, name) {
+	const sep = parent.includes("\\") || !parent.includes("/") ? "\\" : "/";
+	return parent.replace(/[\\/]+$/, "") + sep + name;
+}
+
+function parentOf(file) {
+	return file.replace(/[\\/][^\\/]*$/, "");
+}
+
+async function openCreateWizard(fromHtml) {
+	createForm.reset();
+	wizard.steps = fromHtml ? ["source", "location", "settings"] : ["location", "settings"];
+	wizard.index = 0;
+	wizard.nameTouched = false;
+	$("#create-title").textContent = fromHtml ? "Load wiki from HTML" : "New empty wiki";
+	for (const element of document.querySelectorAll(".tw-version-name")) {
+		element.textContent = "TiddlyWiki " + state.twVersion;
+	}
+	// Most wikis sit side by side, so suggest the folder the first wiki is in
+	createForm.elements.parent.value = state.wikis.length ? parentOf(state.wikis[0].path) : "";
+	createForm.elements.port.value = await api.suggestPort();
+	groupOptions(createForm.elements.group, "");
+	$("#create-group-field").hidden = !state.groups.length;
+	showCreateStep();
+	createDialog.showModal();
+}
+
+function showCreateStep() {
+	const current = wizard.steps[wizard.index];
+	for (const section of createForm.querySelectorAll("section[data-step]")) {
+		section.hidden = section.dataset.step !== current;
+	}
+	$("#create-steps").replaceChildren(...wizard.steps.map((step, index) => {
+		const li = document.createElement("li");
+		li.textContent = CREATE_STEPS[step];
+		li.className = index === wizard.index ? "current" : index < wizard.index ? "done" : "";
+		return li;
+	}));
+	$("#create-back").hidden = wizard.index === 0;
+	$("#create-next").textContent = wizard.index === wizard.steps.length - 1 ? "Create wiki" : "Next";
+	$("#create-error").hidden = true;
+	updateCreateTarget();
+	const first = createForm.querySelector("section[data-step=" + current + "] input");
+	if (first) {
+		first.focus();
+	}
+}
+
+function updateCreateTarget() {
+	const parent = createForm.elements.parent.value.trim();
+	const name = createForm.elements.folderName.value.trim();
+	$("#create-target").textContent = parent && name ? "The wiki is created in " + joinPath(parent, name) : "";
+}
+
+// Checks the fields of the current step; the main process checks everything again
+function checkCreateStep() {
+	const step = wizard.steps[wizard.index];
+	const value = name => createForm.elements[name].value.trim();
+	if (step === "source" && !/\.html?$/i.test(value("htmlFile"))) {
+		return "Choose a TiddlyWiki .html file.";
+	}
+	if (step === "location") {
+		if (!value("parent")) {
+			return "Choose the folder to create the wiki in.";
+		}
+		if (!value("folderName")) {
+			return "Enter a name for the new wiki folder.";
+		}
+		if (/[\\/:*?"<>|]/.test(value("folderName"))) {
+			return "The folder name can't contain \\ / : * ? \" < > |";
+		}
+	}
+	if (step === "settings" && !value("name")) {
+		return "Enter a name.";
+	}
+	return null;
+}
+
+function setFolderSuggestion(name) {
+	createForm.elements.folderName.value = name;
+	if (!wizard.nameTouched) {
+		createForm.elements.name.value = name;
+	}
+	updateCreateTarget();
+}
+
+$("#pick-html").addEventListener("click", () => run(async () => {
+	const file = await api.pickFile("Single-file TiddlyWiki", [{ name: "TiddlyWiki HTML", extensions: ["html", "htm"] }]);
+	if (file) {
+		createForm.elements.htmlFile.value = file;
+		createForm.elements.parent.value = parentOf(file);
+		setFolderSuggestion(file.split(/[\\/]/).pop().replace(/\.html?$/i, "").replace(/[:*?"<>|]/g, "_"));
+	}
+}));
+
+$("#pick-parent").addEventListener("click", () => run(async () => {
+	const folder = await api.pickFolder("Folder to create the wiki in");
+	if (folder) {
+		createForm.elements.parent.value = folder;
+		updateCreateTarget();
+	}
+}));
+
+$("#pick-create-shared").addEventListener("click", () => run(async () => {
+	const folder = await api.pickFolder("Shared wiki to include");
+	if (folder) {
+		createForm.elements.sharedPath.value = folder;
+	}
+}));
+
+createForm.elements.parent.addEventListener("input", updateCreateTarget);
+createForm.elements.folderName.addEventListener("input", () => {
+	if (!wizard.nameTouched) {
+		createForm.elements.name.value = createForm.elements.folderName.value;
+	}
+	updateCreateTarget();
+});
+createForm.elements.name.addEventListener("input", () => (wizard.nameTouched = true));
+
+$("#create-back").addEventListener("click", () => {
+	wizard.index--;
+	showCreateStep();
+});
+
+$("#create-cancel").addEventListener("click", () => createDialog.close());
+
+createForm.addEventListener("submit", async event => {
+	event.preventDefault();
+	const problem = checkCreateStep();
+	if (problem) {
+		$("#create-error").textContent = problem;
+		$("#create-error").hidden = false;
+		return;
+	}
+	if (wizard.index < wizard.steps.length - 1) {
+		wizard.index++;
+		showCreateStep();
+		return;
+	}
+	const next = $("#create-next");
+	const back = $("#create-back");
+	next.disabled = back.disabled = true;
+	next.textContent = wizard.steps[0] === "source" ? "Converting…" : "Creating…";
+	try {
+		const value = name => createForm.elements[name].value.trim();
+		const id = await api.createWiki({
+			htmlFile: wizard.steps[0] === "source" ? value("htmlFile") : null,
+			parent: value("parent"),
+			folderName: value("folderName"),
+			name: value("name"),
+			port: Number(value("port")),
+			group: value("group") || null,
+			sharedPath: value("sharedPath"),
+			autostart: createForm.elements.autostart.checked
+		});
+		createDialog.close();
+		if (createForm.elements.openAfter.checked) {
+			await run(() => api.openWiki(id, false));
+		}
+	} catch (e) {
+		$("#create-error").textContent = cleanError(e);
+		$("#create-error").hidden = false;
+		next.textContent = "Create wiki";
+	} finally {
+		next.disabled = back.disabled = false;
+	}
+});
+
+$("#new-empty-wiki").addEventListener("click", () => run(() => openCreateWizard(false)));
+$("#new-html-wiki").addEventListener("click", () => run(() => openCreateWizard(true)));
 
 for (const copyButton of document.querySelectorAll("button.copy")) {
 	copyButton.addEventListener("click", () => run(async () => {

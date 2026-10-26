@@ -5,7 +5,9 @@ TiddlyWiki (currently 5.4.1) is bundled; each wiki runs as its own server on `12
 
 ## Use
 
-- **Add a wiki:** `+ Add wiki` → existing folder (contains `tiddlywiki.info`) or create a new one (optionally including a shared wiki such as `../_shared`).
+- **Add a wiki:** `+ Add wiki` → an existing wiki folder (contains `tiddlywiki.info`).
+- **New wiki:** `+ Empty wiki` → wizard: where (parent folder + folder name), then name, port, group, optional shared wiki to include (e.g. `../_shared`). Creates a server wiki (`tiddlywiki --init server`).
+- **From a single-file wiki:** `+ Load from HTML` → same wizard, starting with the `.html` file; converts it with `--savewikifolder` (the HTML file is not changed). Official plugins are referenced by name and so load in the bundled TiddlyWiki version; other plugins land in the wiki's `tiddlers` folder (move them to the store in Plugins). Password-protected files must be saved without password first.
 - **Start / Stop / Open / Browser / Log** per wiki; "Start when TW Desk starts" = autostart.
 - **Groups:** `+ Add group` creates a group; the list shows one section per group (wikis without a group under "Ungrouped"). A wiki belongs to at most one group, chosen in **Edit**. Rename/Delete in the group's header; deleting a group keeps its wikis (ungrouped). ▲/▼ move a wiki within its group. Click a group's name to collapse or expand it (remembered in `config.json`).
 - **Includes** (`includeWikis` in `tiddlywiki.info`): shown under each wiki; the `Includes` button lists which wikis include which folder. Change them in **Edit** (wiki must be stopped; only folders with a `tiddlywiki.info`).

@@ -5,6 +5,7 @@ const fs = require("fs");
 const net = require("net");
 const path = require("path");
 const crypto = require("crypto");
+const plugins = require("./plugins");
 
 const DEFAULT_BASE_PORT = 8090;
 const MAX_LOG_LINES = 500;
@@ -32,6 +33,12 @@ function loadConfig() {
 		if (e.code !== "ENOENT") {
 			dialog.showErrorBox("TW Desk", "Could not read " + configPath() + ":\n" + e.message);
 		}
+	}
+	if (!Array.isArray(config.libraries)) {
+		config.libraries = [
+			{ url: "https://tiddlywiki.com/library/v" + TW_VERSION + "/index.html", type: "tiddlywiki" },
+			{ url: "https://tw-cpl.netlify.app/repo", type: "cpl" }
+		];
 	}
 }
 
@@ -179,7 +186,7 @@ function wikiUrl(wiki) {
 
 function runTiddlyWiki(args, serviceName) {
 	return utilityProcess.fork(TW_PROCESS, [], {
-		env: Object.assign({}, process.env, { TW_DESK_ARGS: JSON.stringify(args) }),
+		env: Object.assign({}, process.env, plugins.tiddlyWikiEnv(process.env), { TW_DESK_ARGS: JSON.stringify(args) }),
 		stdio: "pipe",
 		execArgv: ["--no-deprecation"],
 		serviceName
@@ -380,6 +387,134 @@ ipcMain.handle("save-wiki", async (event, input) => {
 
 ipcMain.handle("save-includes", (event, id, entries) => saveIncludes(id, entries));
 
+// ---------- plugins ----------
+
+// All wiki folders TW Desk knows: the wikis in the list plus the folders they include
+function knownFolders() {
+	const folders = new Map(); // lower-cased path -> folder
+	const add = (folderPath, wiki) => {
+		const key = path.resolve(folderPath).toLowerCase();
+		if (!folders.has(key)) {
+			folders.set(key, { path: path.resolve(folderPath), name: null, users: [] });
+		}
+		const folder = folders.get(key);
+		if (wiki) {
+			folder.users.push(wiki);
+		}
+		return folder;
+	};
+	for (const wiki of config.wikis) {
+		add(wiki.path, wiki).name = wiki.name;
+	}
+	for (const wiki of config.wikis) {
+		for (const include of readIncludes(wiki.path).includes) {
+			if (include.exists) {
+				add(include.resolved, wiki);
+			}
+		}
+	}
+	return [...folders.values()].map(folder => ({
+		path: folder.path,
+		name: folder.name || path.basename(folder.path),
+		managed: !!folder.name,
+		// Wikis that load this folder: the wiki itself and the wikis including it
+		usedBy: folder.users.map(w => w.name),
+		running: folder.users.some(w => ["running", "starting"].includes(serverState(w.id).status))
+	}));
+}
+
+function findFolder(folderPath) {
+	const folder = knownFolders().find(f => f.path.toLowerCase() === path.resolve(folderPath).toLowerCase());
+	if (!folder) {
+		throw new Error("Unknown wiki folder: " + folderPath);
+	}
+	return folder;
+}
+
+function findLibrary(url) {
+	const library = config.libraries.find(l => l.url === url);
+	if (!library) {
+		throw new Error("Unknown library: " + url);
+	}
+	return library;
+}
+
+function pluginsState() {
+	return {
+		storePath: plugins.storePath(),
+		backupPath: path.join(app.getPath("userData"), "backup"),
+		twVersion: TW_VERSION,
+		libraries: config.libraries,
+		store: plugins.listStore(),
+		bundled: plugins.listBundled(),
+		folders: knownFolders().map(folder => {
+			let lists = null;
+			let error = null;
+			try {
+				lists = plugins.folderLists(folder.path);
+			} catch (e) {
+				error = "Cannot read tiddlywiki.info: " + e.message;
+			}
+			return Object.assign(folder, { lists, error, stored: plugins.listStoredInWiki(folder.path) });
+		})
+	};
+}
+
+ipcMain.handle("plugins-state", () => pluginsState());
+
+ipcMain.handle("plugins-add-library", async (event, url) => {
+	const library = await plugins.detectLibrary(url);
+	if (config.libraries.some(l => l.url === library.url)) {
+		throw new Error("This library is already in the list.");
+	}
+	config.libraries.push(library);
+	saveConfig();
+	return library;
+});
+
+ipcMain.handle("plugins-remove-library", (event, url) => {
+	config.libraries = config.libraries.filter(l => l.url !== url);
+	saveConfig();
+});
+
+ipcMain.handle("plugins-library-index", (event, url, refresh) => plugins.libraryIndex(findLibrary(url), refresh));
+
+ipcMain.handle("plugins-install", (event, url, title) => plugins.installFromLibrary(findLibrary(url), title));
+
+ipcMain.handle("plugins-remove", (event, kind, name) => {
+	const key = plugins.KINDS[kind].infoKey;
+	const users = knownFolders().filter(folder => {
+		try {
+			return plugins.folderLists(folder.path)[key].includes(name);
+		} catch (e) {
+			return false;
+		}
+	});
+	if (users.length) {
+		throw new Error("Still used by: " + users.map(f => f.name).join(", ") + ". Remove it from those wikis first.");
+	}
+	plugins.removeFromStore(kind, name);
+});
+
+ipcMain.handle("plugins-check-updates", () => {
+	const state = pluginsState();
+	const installed = state.store.concat(...state.folders.map(f => f.stored.map(p => Object.assign({ folder: f.name }, p))));
+	return plugins.checkUpdates(config.libraries, installed);
+});
+
+ipcMain.handle("plugins-set-list", (event, folderPath, kind, names) => {
+	const folder = findFolder(folderPath);
+	plugins.setFolderList(folder.path, kind, names);
+});
+
+ipcMain.handle("plugins-move-to-store", (event, folderPath, file) => {
+	const folder = findFolder(folderPath);
+	if (folder.running) {
+		throw new Error("Stop the wikis using this folder first: " + folder.usedBy.join(", "));
+	}
+	return plugins.moveToStore(folder.path, file);
+});
+
 ipcMain.handle("remove-wiki", (event, id) => {
 	stopWiki(id);
 	config.wikis = config.wikis.filter(w => w.id !== id);
@@ -446,6 +581,7 @@ if (!app.requestSingleInstanceLock()) {
 	});
 
 	app.whenReady().then(() => {
+		plugins.init(app.getPath("userData"));
 		loadConfig();
 		createManagerWindow();
 		for (const wiki of config.wikis) {

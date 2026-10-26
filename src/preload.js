@@ -10,6 +10,17 @@ contextBridge.exposeInMainWorld("twDesk", {
 	saveWiki: wiki => ipcRenderer.invoke("save-wiki", wiki),
 	removeWiki: id => ipcRenderer.invoke("remove-wiki", id),
 	saveIncludes: (id, entries) => ipcRenderer.invoke("save-includes", id, entries),
+	plugins: {
+		getState: () => ipcRenderer.invoke("plugins-state"),
+		addLibrary: url => ipcRenderer.invoke("plugins-add-library", url),
+		removeLibrary: url => ipcRenderer.invoke("plugins-remove-library", url),
+		libraryIndex: (url, refresh) => ipcRenderer.invoke("plugins-library-index", url, refresh),
+		install: (url, title) => ipcRenderer.invoke("plugins-install", url, title),
+		remove: (kind, name) => ipcRenderer.invoke("plugins-remove", kind, name),
+		checkUpdates: () => ipcRenderer.invoke("plugins-check-updates"),
+		setList: (folder, kind, names) => ipcRenderer.invoke("plugins-set-list", folder, kind, names),
+		moveToStore: (folder, file) => ipcRenderer.invoke("plugins-move-to-store", folder, file)
+	},
 	moveWiki: (id, delta) => ipcRenderer.invoke("move-wiki", id, delta),
 	startWiki: id => ipcRenderer.invoke("start-wiki", id),
 	stopWiki: id => ipcRenderer.invoke("stop-wiki", id),

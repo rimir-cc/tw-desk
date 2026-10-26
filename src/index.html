@@ -12,6 +12,7 @@
 	<span id="tw-version" class="muted"></span>
 	<span class="spacer"></span>
 	<button id="show-includes" title="Which folders are included by which wikis">Includes</button>
+	<button id="show-plugins" title="Shared plugin store, libraries and the plugins of each wiki">Plugins</button>
 	<button id="add-wiki" class="primary">+ Add wiki</button>
 </header>
 
@@ -83,6 +84,24 @@
 	</div>
 </dialog>
 
+<dialog id="plugins-dialog">
+	<div class="plugins-header">
+		<h2>Plugins</h2>
+		<nav class="tabs">
+			<button type="button" data-tab="wikis" class="tab">Wikis</button>
+			<button type="button" data-tab="store" class="tab">Store</button>
+			<button type="button" data-tab="libraries" class="tab">Libraries</button>
+		</nav>
+		<span class="spacer"></span>
+		<button type="button" id="close-plugins">Close</button>
+	</div>
+	<p id="plugins-message" class="plugins-message" hidden></p>
+	<section id="tab-wikis" class="tab-panel"></section>
+	<section id="tab-store" class="tab-panel"></section>
+	<section id="tab-libraries" class="tab-panel"></section>
+</dialog>
+
 <script src="renderer.js"></script>
+<script src="plugins-ui.js"></script>
 </body>
 </html>

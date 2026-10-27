@@ -95,14 +95,15 @@ folders** – use copies (see Testing).
 
 Automated tests (`test/`):
 
-- `npm test` – module tests with Node's test runner (`test/unit/`: web.js, search.js, plugins.js incl. a render with
-  the bundled TiddlyWiki that loads a store plugin). No Electron needed (`test/helpers/electron-stub.js`), so they
+- `npm test` – module tests with Node's test runner (`test/unit/`: web.js, search.js, git.js, plugins.js incl. a render
+  with the bundled TiddlyWiki that loads a store plugin). No Electron needed (`test/helpers/electron-stub.js`), so they
   run in this sandbox too: there `node_modules` is empty, so set `NODE_PATH` to a folder holding `tiddlywiki`.
 - `npm run test:e2e` – Playwright drives the real app (`_electron.launch`), run by the user on Windows. Each test gets
   a temp user-data folder, copies of template wikis made with the bundled TiddlyWiki, base port 18390 and a local
   server (`test/helpers/server.js`) standing in for the plugin libraries (standard + CPL) and web wikis.
   Native dialogs and `shell.*` are replaced in the main process (`stubMainProcess` in `test/e2e/fixtures.js`);
-  an `alert()` in the UI fails the test. Failed tests leave a trace, window screenshots and the main-process
+  an `alert()` in the UI fails the test. Git (tests and the app under test) runs with `test/helpers/git-env.js`: an
+  empty global config (branch `main`, no signing) and a test identity, never the user's git settings. Failed tests leave a trace, window screenshots and the main-process
   log under `test-results/` (in the repo, so they can be read here).
 
 Manual testing – never against the user's wikis or their `%APPDATA%\TW Desk`. Instead:

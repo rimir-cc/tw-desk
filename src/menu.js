@@ -8,7 +8,6 @@ let lastClosed = { anchor: null, time: 0 };
 
 function closeMenu() {
 	if (openMenu) {
-		lastClosed = { anchor: openMenu.anchor, time: Date.now() };
 		openMenu.remove();
 		openMenu = null;
 	}
@@ -83,7 +82,12 @@ function showMenu(items, at) {
 
 document.addEventListener("mousedown", event => {
 	if (openMenu && !openMenu.contains(event.target)) {
+		const anchor = openMenu.anchor;
 		closeMenu();
+		// Only a press on the menu's own button counts, not e.g. choosing an item
+		if (anchor && anchor.contains(event.target)) {
+			lastClosed = { anchor, time: Date.now() };
+		}
 	}
 }, true);
 window.addEventListener("blur", closeMenu);

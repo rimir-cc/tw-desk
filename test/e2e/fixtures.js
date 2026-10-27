@@ -2,12 +2,14 @@
 
 // Fixtures for the end-to-end tests. Each test gets its own TW Desk, started from source with a throwaway
 // user-data folder (TW_DESK_USER_DATA) and its own copies of small test wikis – never the user's wikis or config.
-// Native dialogs and the shell (browser, file manager, trash) are replaced in the main process, see stubMainProcess().
+// Native dialogs and the shell (browser, file manager, trash) are replaced in the main process (stubMainProcess()),
+// confirm() and alert() in the page (launch()).
 
 const { test: base, expect, _electron } = require("@playwright/test");
 const crypto = require("crypto");
 const fs = require("fs");
 const path = require("path");
+const { GIT_ENV, sh } = require("../helpers/git-env");
 const tw = require("../helpers/tw");
 const { startServer } = require("../helpers/server");
 
@@ -81,7 +83,8 @@ class Desk {
 		fs.mkdirSync(this.userData, { recursive: true });
 		fs.writeFileSync(path.join(this.userData, "config.json"), JSON.stringify(full, null, 2));
 
-		const env = Object.assign({}, process.env, { TW_DESK_USER_DATA: this.userData, ELECTRON_DISABLE_SECURITY_WARNINGS: "true" });
+		// GIT_ENV: the app's git uses an empty global config and a test identity, not the user's settings
+		const env = Object.assign({}, process.env, GIT_ENV, { TW_DESK_USER_DATA: this.userData, ELECTRON_DISABLE_SECURITY_WARNINGS: "true" });
 		delete env.ELECTRON_RUN_AS_NODE;
 		this.app = await _electron.launch({ args: [ROOT], cwd: ROOT, env });
 		const child = this.app.process();
@@ -90,10 +93,18 @@ class Desk {
 		await this.app.context().tracing.start({ screenshots: true, snapshots: true });
 		await this.app.evaluate(stubMainProcess);
 		this.page = await this.app.firstWindow();
-		this.page.on("dialog", dialog => {
-			this.dialogs.push({ type: dialog.type(), message: dialog.message() });
-			// confirm() questions are answered with OK; alert() means an error was shown (see finish())
-			dialog.type() === "confirm" ? dialog.accept() : dialog.dismiss();
+		// Electron shows confirm() and alert() as native windows Playwright doesn't see: replace them in the page.
+		// confirm() questions are answered with OK; an alert() means an error was shown (see finish())
+		await this.page.waitForLoadState("domcontentloaded");
+		await this.page.evaluate(() => {
+			window.testDialogs = [];
+			window.confirm = message => {
+				window.testDialogs.push({ type: "confirm", message });
+				return true;
+			};
+			window.alert = message => {
+				window.testDialogs.push({ type: "alert", message });
+			};
 		});
 		await expect(this.page.locator("#tw-version")).not.toBeEmpty();
 		return this.page;
@@ -125,8 +136,36 @@ class Desk {
 
 	// ---------- the main window ----------
 
+	// The row of the wiki with exactly this name (the name may be followed by its git chip "⎇ …")
 	row(name) {
-		return this.page.locator("li.wiki:not(.web-link)").filter({ has: this.page.locator(".wiki-name", { hasText: new RegExp("^" + escapeRegExp(name) + "(\\s|$)") }) });
+		return this.page.locator("li.wiki:not(.web-link)").filter({ has: this.page.locator(".wiki-name", { hasText: new RegExp("^" + escapeRegExp(name) + "(\\s*⎇.*)?$") }) });
+	}
+
+	groupHeader(name) {
+		return this.page.locator("li.group-header:not(.web-header)").filter({ has: this.page.locator(".group-toggle", { hasText: new RegExp("^[▾▸] " + escapeRegExp(name) + "$") }) });
+	}
+
+	async startWiki(name) {
+		const row = this.row(name);
+		await row.getByRole("button", { name: "Start", exact: true }).click();
+		await expect(row.locator(".wiki-meta")).toContainText("running", { timeout: 60000 });
+		return (await this.wikiState(name)).port;
+	}
+
+	async stopWiki(name) {
+		const row = this.row(name);
+		await row.getByRole("button", { name: "Stop", exact: true }).click();
+		await expect(row.locator(".wiki-meta")).toContainText("stopped");
+	}
+
+	// Saves a tiddler through the wiki's server, as the wiki in its window would
+	async saveTiddler(port, title, text) {
+		const response = await this.http(port, "/recipes/default/tiddlers/" + encodeURIComponent(title), {
+			method: "PUT",
+			headers: { "Content-Type": "application/json" },
+			body: JSON.stringify({ title, text })
+		});
+		expect(response.status).toBeLessThan(300);
 	}
 
 	webRow(name) {
@@ -183,6 +222,7 @@ class Desk {
 			return;
 		}
 		const info = this.testInfo;
+		this.dialogs = (await this.page.evaluate(() => window.testDialogs).catch(() => null)) || [];
 		try {
 			if (failed) {
 				for (const [index, win] of this.app.windows().entries()) {
@@ -244,4 +284,4 @@ const test = base.extend({
 	}
 });
 
-module.exports = { test, expect, BASE_PORT, tw };
+module.exports = { test, expect, BASE_PORT, tw, sh };

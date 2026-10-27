@@ -69,3 +69,42 @@ test("install from a library, use it in a wiki, update from another library", as
 	const newPort = (await desk.wikiState("Alpha")).port;
 	expect((await desk.tiddler(newPort, "$:/plugins/test/hello")).version).toBe("1.1.0");
 });
+
+test("move a plugin stored inside a wiki into the store", async ({ desk }) => {
+	const alpha = desk.wiki("alpha");
+	// As TiddlyWiki saves a plugin dropped into a wiki: content in .json, fields in .json.meta
+	const plugin = pluginTiddler("$:/plugins/test/inwiki", "0.5.0");
+	const file = path.join(alpha, "tiddlers", "$__plugins_test_inwiki.json");
+	fs.writeFileSync(file, plugin.text);
+	fs.writeFileSync(file + ".meta", Object.entries(plugin).filter(([key]) => key !== "text").map(([key, value]) => key + ": " + value).join("\n"));
+	const page = await desk.launch({ wikis: [{ name: "Alpha", path: alpha }] });
+	const dialog = page.locator("#plugins-dialog");
+	const card = dialog.locator("#tab-wikis .card", { hasText: "Alpha" });
+	const stored = card.locator("tr", { hasText: "$:/plugins/test/inwiki" }).filter({ hasText: "in wiki 0.5.0" });
+	const move = stored.getByRole("button", { name: "Move to store" });
+
+	// Not while the wiki runs
+	await desk.startWiki("Alpha");
+	await page.locator("#show-plugins").click();
+	await dialog.locator("[data-tab=wikis]").click();
+	await expect(move).toBeDisabled();
+	await dialog.locator("#close-plugins").click();
+	await desk.stopWiki("Alpha");
+
+	await page.locator("#show-plugins").click();
+	await move.click();
+	await expect(page.locator("#plugins-message")).toContainText("Moved $:/plugins/test/inwiki 0.5.0 to the store.");
+	await expect(stored).toHaveCount(0);
+	await expect(card.locator("tr", { hasText: "test/inwiki" }).locator(".badge")).toHaveText("store 0.5.0");
+	expect(fs.existsSync(file)).toBe(false);
+	expect(fs.existsSync(file + ".meta")).toBe(false);
+	expect(JSON.parse(fs.readFileSync(path.join(alpha, "tiddlywiki.info"), "utf8")).plugins).toContain("test/inwiki");
+	const backups = fs.readdirSync(path.join(desk.userData, "backup"));
+	expect(backups).toHaveLength(1);
+	expect(fs.readdirSync(path.join(desk.userData, "backup", backups[0], "alpha")).sort()).toEqual(["$__plugins_test_inwiki.json", "$__plugins_test_inwiki.json.meta"]);
+	await dialog.locator("#close-plugins").click();
+
+	// The wiki now gets it from the store
+	const port = await desk.startWiki("Alpha");
+	expect((await desk.tiddler(port, "$:/plugins/test/inwiki")).version).toBe("0.5.0");
+});

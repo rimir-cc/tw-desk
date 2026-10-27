@@ -32,7 +32,8 @@ function initWiki(folder, edition = "server") {
 
 function writeTiddler(folder, title, text, fields = {}) {
 	const header = Object.entries(Object.assign({ title }, fields)).map(([k, v]) => k + ": " + v).join("\n");
-	const file = path.join(folder, "tiddlers", title.replace(/[^\w-]/g, "_") + ".tid");
+	// File name as TiddlyWiki's filesystem plugin makes it, e.g. "$:/config/x" -> "$__config_x.tid"
+	const file = path.join(folder, "tiddlers", title.replace(/[<>:"/\\|?*]/g, "_") + ".tid");
 	fs.writeFileSync(file, header + "\n\n" + text);
 	return file;
 }

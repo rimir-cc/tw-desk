@@ -20,7 +20,8 @@ folders** – use copies (see Testing).
 - `src/web.js` – tiddlers and per-tiddler hashes of a single-file wiki's HTML (web wiki snapshots and change checks).
 - `src/preload.js` – `window.twDesk` API (contextBridge); `window.twDesk.plugins.*` for the plugins window.
 - `src/renderer.js` + `index.html` + `styles.css` – manager UI; `src/plugins-ui.js` – Plugins window
-  (shares globals `$`, `api`, `run`, `cleanError`, `folderName` from renderer.js).
+  (shares globals `$`, `api`, `run`, `cleanError`, `folderName` from renderer.js); `src/search.js` – library search
+  (query parsing, grouping, ranking), a plain script in the window and a module for the unit tests.
 - `build/installer.nsh` – forces per-user install in the assisted NSIS installer.
 - `scripts/cdp.mjs` – DevTools helper for testing (see below).
 
@@ -53,7 +54,7 @@ folders** – use copies (see Testing).
     where `<name>` = title without `$:/plugins/` and `/` (and `:<>"|?*`) replaced by `_`.
   - Fetched with Electron `net.fetch` (uses system proxy settings).
   - The Libraries tab searches all indexes at once (`allIndexes`; entries keep every non-text field in `fields`);
-    query parsing/ranking/grouping by title lives in `plugins-ui.js` (`parseQuery`, `scoreGroup`, `searchGroups`).
+    query parsing/ranking/grouping by title lives in `search.js` (`parseQuery`, `scoreGroup`, `groupOffers`).
 - Writing `tiddlywiki.info` (includes, plugin lists) re-serializes it with 4-space JSON; skipped if unchanged.
 - **Copying a wiki** (`copyWikiFolder`): file copy, skipping `.git`, `output`, `$__StoryList.tid`, `$__HistoryList.json`;
   "config" mode keeps only tiddler files whose title (from `.meta` / `.tid` header / all titles of a `.json`) starts
@@ -92,7 +93,19 @@ folders** – use copies (see Testing).
 
 ## Testing
 
-Never run tests against the user's wikis or their `%APPDATA%\TW Desk`. Instead:
+Automated tests (`test/`):
+
+- `npm test` – module tests with Node's test runner (`test/unit/`: web.js, search.js, plugins.js incl. a render with
+  the bundled TiddlyWiki that loads a store plugin). No Electron needed (`test/helpers/electron-stub.js`), so they
+  run in this sandbox too: there `node_modules` is empty, so set `NODE_PATH` to a folder holding `tiddlywiki`.
+- `npm run test:e2e` – Playwright drives the real app (`_electron.launch`), run by the user on Windows. Each test gets
+  a temp user-data folder, copies of template wikis made with the bundled TiddlyWiki, base port 18390 and a local
+  server (`test/helpers/server.js`) standing in for the plugin libraries (standard + CPL) and web wikis.
+  Native dialogs and `shell.*` are replaced in the main process (`stubMainProcess` in `test/e2e/fixtures.js`);
+  an `alert()` in the UI fails the test. Failed tests leave a trace, window screenshots and the main-process
+  log under `test-results/` (in the repo, so they can be read here).
+
+Manual testing – never against the user's wikis or their `%APPDATA%\TW Desk`. Instead:
 
 1. Copy `orga`, `priv-orga`, `_shared` into a temp folder (drop `.git`), keep them side by side.
 2. Write a test `config.json` into a temp user-data folder with a test `basePort` (e.g. 18090),

@@ -217,8 +217,8 @@ function newerOffers(result) {
 		return [];
 	}
 	return result.offers
-		.filter(o => window.compareVersionsLoose(o.version, result.version) > 0)
-		.sort((a, b) => window.compareVersionsLoose(b.version, a.version) || (b.library === result.library) - (a.library === result.library));
+		.filter(o => compareVersionsLoose(o.version, result.version) > 0)
+		.sort((a, b) => compareVersionsLoose(b.version, a.version) || (b.library === result.library) - (a.library === result.library));
 }
 
 function updateStatus(result) {
@@ -285,7 +285,7 @@ function renderUpdateCheck(panel) {
 			: "stored inside " + result.folder;
 		const offers = result.offers.length
 			? result.offers.map(o => {
-				const cmp = result.version ? window.compareVersionsLoose(o.version, result.version) : 0;
+				const cmp = result.version ? compareVersionsLoose(o.version, result.version) : 0;
 				return el("span", {
 					class: "badge" + (cmp > 0 ? " update" : cmp === 0 && result.version ? " store" : ""),
 					title: libraryLabel(o.library) + " offers " + (o.version || "no version") + (cmp > 0 ? " (newer)" : cmp < 0 ? " (older)" : " (same)")
@@ -320,77 +320,9 @@ function renderUpdateCheck(panel) {
 
 const search = { query: "", library: "", kind: "", hideInstalled: false, indexes: null, loading: null, open: new Set(), limit: 100 };
 const SEARCH_PAGE = 100;
-const ENTRY_FIELDS = ["title", "name", "author", "tags", "description", "version"];
-const FIELD_ALIASES = { tag: "tags" };
-
-// Words must all match somewhere; "a phrase" is one word; -word excludes; field:value looks in one field only
-// (title, name, author, tag, description, version or any other index field, e.g. core-version:5.3)
-function parseQuery(text) {
-	const terms = [];
-	const pattern = /(-)?(?:([\w-]+):)?(?:"([^"]*)"?|(\S+))/g;
-	let match;
-	while ((match = pattern.exec(text))) {
-		const value = (match[3] !== undefined ? match[3] : match[4] || "").toLowerCase();
-		// A lone "-" is an exclusion still being typed
-		if (value && value !== "-") {
-			const field = match[2] ? match[2].toLowerCase() : null;
-			terms.push({ exclude: !!match[1], field: field ? FIELD_ALIASES[field] || field : null, value });
-		}
-	}
-	return terms;
-}
-
-function entryText(entry, field) {
-	if (!field) {
-		if (entry.searchText === undefined) {
-			entry.searchText = [entry.title, entry.description, entry.author, entry.tags].concat(Object.values(entry.fields || {})).join("\n").toLowerCase();
-		}
-		return entry.searchText;
-	}
-	return String((ENTRY_FIELDS.includes(field) ? entry[field] : (entry.fields || {})[field]) || "").toLowerCase();
-}
-
-// One group per plugin title, with what each library offers (newest first)
+// One group per plugin title (see search.js)
 function searchGroups() {
-	const groups = new Map();
-	for (const index of search.indexes || []) {
-		if (!index.entries || (search.library && index.url !== search.library)) {
-			continue;
-		}
-		for (const entry of index.entries) {
-			if (search.kind && entry.kind !== search.kind) {
-				continue;
-			}
-			if (!groups.has(entry.title)) {
-				groups.set(entry.title, { title: entry.title, kind: entry.kind, name: entry.name, offers: [] });
-			}
-			groups.get(entry.title).offers.push({ library: index.url, entry });
-		}
-	}
-	for (const group of groups.values()) {
-		group.offers.sort((a, b) => window.compareVersionsLoose(b.entry.version, a.entry.version));
-		group.entry = group.offers[0].entry;
-	}
-	return [...groups.values()];
-}
-
-// -1 if the group doesn't match; higher is better (name > title > description > author/tags > other fields)
-function scoreGroup(group, terms) {
-	let score = 0;
-	for (const term of terms) {
-		const hit = group.offers.some(o => entryText(o.entry, term.field).includes(term.value));
-		if (term.exclude ? hit : !hit) {
-			return -1;
-		}
-		if (!term.exclude) {
-			const e = group.entry;
-			score += e.name.toLowerCase() === term.value ? 20
-				: e.title.toLowerCase().includes(term.value) ? 10
-				: e.description.toLowerCase().includes(term.value) ? 3
-				: (e.author + " " + e.tags).toLowerCase().includes(term.value) ? 2 : 1;
-		}
-	}
-	return score;
+	return groupOffers(search.indexes, { library: search.library, kind: search.kind });
 }
 
 // Bundled / in the store (and whether a library has a newer version)
@@ -401,7 +333,7 @@ function installedState(group) {
 	}
 	const stored = pstate.store.find(p => p.title === group.title);
 	if (stored) {
-		const newer = window.compareVersionsLoose(group.entry.version, stored.version) > 0;
+		const newer = compareVersionsLoose(group.entry.version, stored.version) > 0;
 		return { badge: el("span", { class: "badge " + (newer ? "update" : "store") }, "store " + (stored.version || "?")), installed: true, newer, stored };
 	}
 	return { badge: null, installed: false, newer: false };
@@ -538,13 +470,13 @@ function appendSearchRow(table, group, state, terms) {
 	});
 	const installedVersion = state.stored ? state.stored.version : null;
 	const offers = group.offers.map(o => el("span", {
-		class: "badge" + (installedVersion && window.compareVersionsLoose(o.entry.version, installedVersion) > 0 ? " update" : ""),
+		class: "badge" + (installedVersion && compareVersionsLoose(o.entry.version, installedVersion) > 0 ? " update" : ""),
 		title: libraryLabel(o.library) + " offers " + (o.entry.version || "no version")
 	}, libraryLabel(o.library) + " " + (o.entry.version || "?")));
 	// One button per library with a version worth installing (newest first)
 	let actions = null;
 	if (!pstate.bundled.find(p => p.title === group.title)) {
-		const candidates = group.offers.filter(o => !installedVersion || window.compareVersionsLoose(o.entry.version, installedVersion) > 0);
+		const candidates = group.offers.filter(o => !installedVersion || compareVersionsLoose(o.entry.version, installedVersion) > 0);
 		const several = new Set(candidates.map(o => o.entry.version)).size > 1 || candidates.length > 1;
 		actions = candidates.map((o, i) => actionButton((installedVersion ? "Update → " + o.entry.version : "Install") + (several ? " from " + libraryLabel(o.library) : ""), async () => {
 			const result = await papi.install(o.library, group.title);
@@ -670,7 +602,7 @@ function renderShowcasesTab() {
 			if (bundled) {
 				status = el("span", { class: "badge bundled", title: "Comes with TiddlyWiki; the bundled version is always used" }, "bundled " + bundled.version);
 			} else if (stored) {
-				const newer = window.compareVersionsLoose(entry.version, stored.version) > 0;
+				const newer = compareVersionsLoose(entry.version, stored.version) > 0;
 				status = el("span", { class: "badge " + (newer ? "update" : "store") }, "store " + (stored.version || "?"));
 				action = newer ? actionButton("Update → " + entry.version, () => installFromShowcase(showcase, entry, true), { class: "primary" }) : null;
 			} else {
@@ -709,20 +641,6 @@ function openPluginsTab(tab) {
 		}
 	});
 }
-
-// Version comparison for the UI (main process has the same logic)
-window.compareVersionsLoose = (a, b) => {
-	const parse = v => String(v || "0").replace(/^[^\d]*/, "").split(/[-+]/)[0].split(".").map(n => parseInt(n, 10) || 0);
-	const pa = parse(a);
-	const pb = parse(b);
-	for (let i = 0; i < Math.max(pa.length, pb.length); i++) {
-		const d = (pa[i] || 0) - (pb[i] || 0);
-		if (d) {
-			return d < 0 ? -1 : 1;
-		}
-	}
-	return 0;
-};
 
 // ---------- window ----------
 

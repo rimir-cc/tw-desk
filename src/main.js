@@ -1082,8 +1082,31 @@ function showcaseIndexes() {
 		site: link.url,
 		description: link.description || "",
 		snapshot: link.snapshot ? link.snapshot.date : null,
-		entries: plugins.normalizeEntries(snapshotPluginTiddlers(link), "showcase")
+		entries: plugins.normalizeEntries(snapshotPluginTiddlers(link), "showcase"),
+		// Plugins this showcase demonstrates (chosen by the user); they get "Demo" buttons elsewhere
+		linked: (link.linkedPlugins || []).slice()
 	}));
+}
+
+// Marks a showcase as demo of a plugin in its snapshot, or removes that mark
+function linkShowcase(id, title, linked) {
+	const link = findWebWiki(id);
+	const titles = new Set(link.linkedPlugins || []);
+	if (linked) {
+		if (!snapshotPluginTiddlers(link).some(t => t.title === title)) {
+			throw new Error(title + " is not in the snapshot of \u201c" + link.name + "\u201d.");
+		}
+		titles.add(title);
+	} else {
+		titles.delete(title);
+	}
+	if (titles.size) {
+		link.linkedPlugins = [...titles].sort();
+	} else {
+		delete link.linkedPlugins;
+	}
+	saveConfig();
+	pushState();
 }
 
 function installFromShowcase(id, title) {
@@ -1163,6 +1186,8 @@ ipcMain.handle("plugins-remove", (event, kind, name) => {
 	}
 	plugins.removeFromStore(kind, name);
 });
+
+ipcMain.handle("plugins-link-showcase", (event, id, title, linked) => linkShowcase(id, title, linked));
 
 ipcMain.handle("plugins-check-updates", () => {
 	const state = pluginsState();
@@ -1540,7 +1565,7 @@ ipcMain.handle("save-web-wiki", (event, input) => {
 	const index = config.webWikis.findIndex(l => l.id === link.id);
 	const previous = config.webWikis[index];
 	if (previous) {
-		for (const key of ["snapshot", "check"]) {
+		for (const key of ["snapshot", "check", "linkedPlugins"]) {
 			if (previous[key]) {
 				link[key] = previous[key];
 			}

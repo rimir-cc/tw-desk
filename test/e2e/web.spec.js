@@ -21,6 +21,11 @@ test("web wiki: baseline, change check, snapshot and a wiki made from it", async
 	const row = desk.webRow("Site");
 	await expect(row).toBeVisible();
 	await expect(row.locator(".wiki-description")).toHaveText("A test site");
+	// The "+" in the section header opens the same dialog, for a plain link
+	await page.locator("li.web-header").getByRole("button", { name: "+", exact: true }).click();
+	await expect(page.locator("#link-dialog-title")).toHaveText("Add web wiki");
+	await expect(page.locator("#link-form [name=showcase]")).not.toBeChecked();
+	await page.locator("#cancel-link").click();
 	const link = desk.config().webWikis[0];
 	const baseline = path.join(desk.userData, "web", link.id, "baseline.json");
 	await expect.poll(() => fs.existsSync(baseline)).toBe(true);
@@ -96,31 +101,88 @@ test("web wiki: baseline, change check, snapshot and a wiki made from it", async
 	await expect(row).toBeVisible();
 });
 
-test("a web wiki marked as plugin showcase offers its plugins", async ({ desk, server }) => {
-	const url = server.setPage("/showcase/index.html", tw.wikiHtml([pluginTiddler("$:/plugins/demo/widget", "0.9.0", { description: "Only in the showcase" })]));
+test("plugin showcase: folded plugin list, add to store, link, Demo buttons with version notes", async ({ desk, server }) => {
+	const showcasePage = version => tw.wikiHtml([
+		pluginTiddler("$:/plugins/demo/widget", version, { description: "Only in the showcase" }),
+		pluginTiddler("$:/plugins/demo/helper", "1.0.0")
+	]);
+	const url = server.setPage("/showcase/index.html", showcasePage("0.9.0"));
 	const page = await desk.launch();
+	const dialog = page.locator("#plugins-dialog");
+	const message = page.locator("#plugins-message");
 
-	await desk.newMenu("Web wiki link…");
+	// "+ Add showcase" in the Showcases tab: the dialog has "Plugin showcase" ticked, the snapshot is saved right away
+	await page.locator("#show-plugins").click();
+	await dialog.locator("[data-tab=showcases]").click();
+	await expect(dialog.locator("#tab-showcases")).toContainText("No showcases yet");
+	await dialog.getByRole("button", { name: "+ Add showcase" }).click();
+	await expect(page.locator("#link-form [name=showcase]")).toBeChecked();
 	await page.locator("#link-form [name=url]").fill(url);
 	await page.locator("#link-form [name=name]").fill("Demo");
-	await page.locator("#link-form [name=showcase]").check();
 	await page.locator("#link-form button[type=submit]").click();
+	await expect(message).toContainText("Added the showcase and saved its snapshot.");
 	const row = desk.webRow("Demo");
-	await expect(row.locator(".showcase-chip")).toHaveText("showcase · no snapshot yet");
-	await desk.rowMenu(row, "Save snapshot");
 	await expect(row.locator(".showcase-chip")).toHaveText(/^showcase · \d+ plugins?$/);
+	expect(desk.config().webWikis[0]).toMatchObject({ name: "Demo", showcase: true });
 
-	await row.locator(".showcase-chip").click();
-	const dialog = page.locator("#plugins-dialog");
+	// The plugin list starts folded
 	const card = dialog.locator("#tab-showcases .card", { hasText: "Demo" });
 	const plugin = card.locator("tr", { hasText: "demo/widget" });
+	await expect(card.locator("details summary")).toContainText("plugins, themes and languages");
+	await expect(plugin).toBeHidden();
+	await card.locator("details summary").click();
 	await expect(plugin).toContainText("Only in the showcase");
-	await plugin.getByRole("button", { name: "Add to store" }).click();
-	await expect(page.locator("#plugins-message")).toContainText("0.9.0");
-	const info = JSON.parse(fs.readFileSync(path.join(desk.userData, "store", "plugins", "demo", "widget", "plugin.info"), "utf8"));
-	expect(info.version).toBe("0.9.0");
 
-	// The store says where it came from
+	await plugin.getByRole("button", { name: "Add to store" }).click();
+	await expect(message).toContainText("Added $:/plugins/demo/widget 0.9.0");
+	const info = path.join(desk.userData, "store", "plugins", "demo", "widget", "plugin.info");
+	expect(JSON.parse(fs.readFileSync(info, "utf8")).version).toBe("0.9.0");
+
+	// Link: the showcase becomes the plugin's demo; the list stays unfolded after the update
+	await plugin.getByRole("button", { name: "Link", exact: true }).click();
+	await expect(message).toContainText("Linked $:/plugins/demo/widget");
+	await expect(plugin).toBeVisible();
+	await expect(plugin.locator(".badge", { hasText: "linked" })).toBeVisible();
+	await expect(card.locator(".showcase-linked")).toContainText("demo/widget 0.9.0");
+	expect(desk.config().webWikis[0].linkedPlugins).toEqual(["$:/plugins/demo/widget"]);
+
+	// Store: a Demo button, no version note while the versions match; it opens the snapshot
 	await dialog.locator("[data-tab=store]").click();
-	await expect(dialog.locator("#tab-store tr", { hasText: "$:/plugins/demo/widget" })).toContainText("from showcase Demo");
+	const stored = dialog.locator("#tab-store tr", { hasText: "$:/plugins/demo/widget" });
+	await expect(stored).toContainText("from showcase Demo");
+	await expect(stored.getByRole("button", { name: "Demo" })).toBeVisible();
+	await expect(stored.locator(".demo-link .badge")).toHaveCount(0);
+	const win = await desk.windowOpenedBy(() => stored.getByRole("button", { name: "Demo" }).click());
+	expect(win.url()).toMatch(/^file:.*snapshot\.html$/);
+	await win.close();
+
+	// The site moves on to 1.0.0: after a new snapshot the Demo buttons say which version the demo shows
+	server.setPage("/showcase/index.html", showcasePage("1.0.0"));
+	await dialog.locator("[data-tab=showcases]").click();
+	await card.getByRole("button", { name: "Update snapshot" }).click();
+	await expect(message).toContainText("Saved the snapshot of Demo");
+	await expect(card.locator(".showcase-linked")).toContainText("demo/widget 1.0.0 (the store has 0.9.0)");
+	await dialog.locator("[data-tab=store]").click();
+	await expect(stored.locator(".demo-link .badge")).toHaveText("demo shows 1.0.0");
+
+	// Libraries search: the showcase's offer and the Demo button with the same note
+	await dialog.locator("[data-tab=libraries]").click();
+	await dialog.locator("input.library-search").fill("widget");
+	const result = dialog.locator(".search-table tr", { hasText: "demo/widget" });
+	await expect(result.getByRole("button", { name: "Demo" })).toBeVisible();
+	await expect(result.locator(".demo-link .badge")).toHaveText("demo shows 1.0.0");
+	await expect(result.getByRole("button", { name: "Update → 1.0.0" })).toBeVisible();
+
+	// The main window names what the showcase demonstrates
+	await dialog.locator("#close-plugins").click();
+	await expect(row.locator(".showcase-chip")).toHaveText("showcase of widget");
+
+	// Unlink (✕ in the "Demo of" line): the Demo buttons are gone
+	await row.locator(".showcase-chip").click();
+	await card.locator(".showcase-linked").getByRole("button", { name: "✕" }).click();
+	await expect(message).toContainText("Removed the link");
+	await expect(card.locator(".showcase-linked")).toHaveCount(0);
+	expect(desk.config().webWikis[0].linkedPlugins).toBeUndefined();
+	await dialog.locator("[data-tab=store]").click();
+	await expect(stored.getByRole("button", { name: "Demo" })).toHaveCount(0);
 });

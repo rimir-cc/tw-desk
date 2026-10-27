@@ -261,6 +261,7 @@ function webHeader(links) {
 	if (changed) {
 		li.append(Object.assign(document.createElement("span"), { className: "git-chip warn", textContent: changed + " changed", title: changed + (changed === 1 ? " website has" : " websites have") + " changed since you last looked" }));
 	}
+	li.append(button("+", () => openLinkDialog(null), { className: "ghost", title: "Add a web wiki link" }));
 	li.append(button(checking ? "Checking…" : "Check for changes", () => api.webWikis.checkAll(), {
 		className: "ghost",
 		disabled: checking,
@@ -342,9 +343,13 @@ function webItem(link, index, count) {
 	}
 	if (link.showcase) {
 		const plugins = link.snapshot ? link.pluginCount + (link.pluginCount === 1 ? " plugin" : " plugins") : "no snapshot yet";
-		name.append(button("showcase · " + plugins, () => openPluginsTab("showcases"), {
+		// Linked: name what it demonstrates ("showcase of relink +1")
+		const linked = (link.linkedPlugins || []).map(title => title.split("/").pop());
+		const text = linked.length ? "showcase of " + linked[0] + (linked.length > 1 ? " +" + (linked.length - 1) : "") : "showcase · " + plugins;
+		name.append(button(text, () => openPluginsTab("showcases"), {
 			className: "git-chip showcase-chip",
 			title: "Plugin showcase: its plugins are listed in Plugins → Showcases" + (link.snapshot ? "" : " once you save a snapshot")
+				+ (linked.length ? "\nDemo of: " + link.linkedPlugins.join(", ") : "")
 		}));
 	}
 	info.append(name);
@@ -428,16 +433,19 @@ function webMenu(link, index, count) {
 
 const linkForm = $("#link-form");
 let editingLinkId = null;
+let linkSaved = null; // called with the link's id after saving (set by openLinkDialog)
 
-function openLinkDialog(link) {
+// options for a new link: { showcase } preselects "Plugin showcase", onSaved(id) runs after saving
+function openLinkDialog(link, options = {}) {
 	editingLinkId = link ? link.id : null;
+	linkSaved = options.onSaved || null;
 	linkForm.reset();
 	$("#link-error").hidden = true;
 	$("#link-dialog-title").textContent = link ? "Edit web wiki" : "Add web wiki";
 	linkForm.elements.url.value = link ? link.url : "";
 	linkForm.elements.name.value = link ? link.name : "";
 	linkForm.elements.description.value = link && link.description ? link.description : "";
-	linkForm.elements.showcase.checked = !!(link && link.showcase);
+	linkForm.elements.showcase.checked = link ? !!link.showcase : !!options.showcase;
 	$("#link-dialog").showModal();
 	linkForm.elements.url.focus();
 }
@@ -445,7 +453,7 @@ function openLinkDialog(link) {
 linkForm.addEventListener("submit", async event => {
 	event.preventDefault();
 	try {
-		await api.webWikis.save({
+		const id = await api.webWikis.save({
 			id: editingLinkId,
 			url: linkForm.elements.url.value,
 			name: linkForm.elements.name.value,
@@ -453,6 +461,9 @@ linkForm.addEventListener("submit", async event => {
 			showcase: linkForm.elements.showcase.checked
 		});
 		$("#link-dialog").close();
+		if (linkSaved) {
+			linkSaved(id);
+		}
 	} catch (e) {
 		$("#link-error").textContent = cleanError(e);
 		$("#link-error").hidden = false;

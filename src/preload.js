@@ -35,6 +35,12 @@ contextBridge.exposeInMainWorld("twDesk", {
 		save: link => ipcRenderer.invoke("save-web-wiki", link),
 		remove: id => ipcRenderer.invoke("remove-web-wiki", id),
 		open: id => ipcRenderer.invoke("open-web-wiki", id),
+		openSnapshot: id => ipcRenderer.invoke("open-snapshot", id),
+		showSnapshot: id => ipcRenderer.invoke("show-snapshot", id),
+		saveSnapshot: id => ipcRenderer.invoke("save-snapshot", id),
+		check: id => ipcRenderer.invoke("check-web-wiki", id),
+		checkAll: () => ipcRenderer.invoke("check-web-wikis"),
+		markSeen: id => ipcRenderer.invoke("mark-web-wiki-seen", id),
 		move: (id, delta) => ipcRenderer.invoke("move-web-wiki", id, delta),
 		setCollapsed: collapsed => ipcRenderer.invoke("set-web-collapsed", collapsed)
 	},

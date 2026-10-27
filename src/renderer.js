@@ -249,6 +249,7 @@ function webHeader(links) {
 	const li = document.createElement("li");
 	li.className = "group-header web-header";
 	const collapsed = !!state.webCollapsed;
+	const checking = links.some(l => l.busy === "checking");
 	li.append(
 		button((collapsed ? "▸ " : "▾ ") + "Web wikis", () => api.webWikis.setCollapsed(!collapsed), {
 			className: "ghost group-toggle",
@@ -256,7 +257,69 @@ function webHeader(links) {
 		}),
 		Object.assign(document.createElement("span"), { className: "muted", textContent: links.length + (links.length === 1 ? " link" : " links") })
 	);
+	const changed = links.filter(l => l.check && l.check.result === "changed").length;
+	if (changed) {
+		li.append(Object.assign(document.createElement("span"), { className: "git-chip warn", textContent: changed + " changed", title: changed + (changed === 1 ? " website has" : " websites have") + " changed since you last looked" }));
+	}
+	li.append(button(checking ? "Checking…" : "Check for changes", () => api.webWikis.checkAll(), {
+		className: "ghost",
+		disabled: checking,
+		title: "Ask every website whether its wiki changed" + (state.webCheck ? " (also done once a day)" : "")
+	}));
 	return li;
+}
+
+function day(iso) {
+	return iso ? iso.slice(0, 10) : "";
+}
+
+// "12 changed, 3 new, 1 removed"
+function changeCounts(check) {
+	const parts = [];
+	if (check.changed) {
+		parts.push(check.changed + " changed");
+	}
+	if (check.added) {
+		parts.push(check.added + " new");
+	}
+	if (check.removed) {
+		parts.push(check.removed + " removed");
+	}
+	return parts.join(", ");
+}
+
+// Chip after the name: what's going on, or what the last check found ({ text, level, title } or null)
+function webStatus(link) {
+	if (link.busy) {
+		return { text: link.busy === "saving" ? "saving snapshot…" : "checking…", level: "", title: "" };
+	}
+	const check = link.check;
+	if (!check || check.result === "same") {
+		return null;
+	}
+	const checked = " (checked " + day(check.date) + ")";
+	if (check.result === "error") {
+		return { text: "unreachable", level: "bad", title: check.error + checked };
+	}
+	const counts = changeCounts(check);
+	const total = (check.changed || 0) + (check.added || 0) + (check.removed || 0);
+	const since = link.snapshot ? "your snapshot of " + day(link.snapshot.date) : "you added it or marked it as seen";
+	return {
+		text: total ? "changed · " + total + (total === 1 ? " tiddler" : " tiddlers") : "changed",
+		level: "warn",
+		title: "The wiki on the website changed since " + since + (counts ? ":\n" + counts + " tiddlers" : "") + (check.twVersion ? "\nnow TiddlyWiki " + check.twVersion : "") + checked
+	};
+}
+
+function snapshotText(snapshot) {
+	const parts = ["snapshot " + day(snapshot.date)];
+	if (snapshot.tiddlers !== null && snapshot.tiddlers !== undefined) {
+		parts.push(snapshot.tiddlers.toLocaleString() + " tiddlers");
+	}
+	if (snapshot.twVersion) {
+		parts.push("TW " + snapshot.twVersion);
+	}
+	return parts.join(" · ");
 }
 
 function webItem(link, index, count) {
@@ -270,6 +333,13 @@ function webItem(link, index, count) {
 	const name = document.createElement("div");
 	name.className = "wiki-name";
 	name.textContent = link.name;
+	const status = webStatus(link);
+	if (status) {
+		const chip = status.level
+			? button(status.text, () => showMenu(webMenu(link, index, count), chip), { className: "git-chip " + status.level, title: status.title + "\n(click for actions)" })
+			: Object.assign(document.createElement("span"), { className: "git-chip", textContent: status.text });
+		name.append(chip);
+	}
 	info.append(name);
 	if (link.description) {
 		const line = document.createElement("div");
@@ -280,15 +350,23 @@ function webItem(link, index, count) {
 	}
 	const meta = document.createElement("div");
 	meta.className = "wiki-meta";
-	meta.textContent = link.url;
+	meta.textContent = link.url + (link.snapshot ? "  ·  " + snapshotText(link.snapshot) : "");
 	meta.title = link.url;
 	info.append(meta);
 	const actions = document.createElement("div");
 	actions.className = "wiki-actions";
-	const more = button("⋯", () => showMenu(webMenu(link, index, count), more), { className: "ghost more", title: "More: import, edit, copy address, move, remove" });
-	actions.append(button("Open ↗", () => api.webWikis.open(link.id), { className: "primary", title: "Open " + link.url + " in the default browser" }), more);
+	const more = button("⋯", () => showMenu(webMenu(link, index, count), more), { className: "ghost more", title: "More: snapshot, check for changes, edit, move, remove" });
+	if (link.snapshot) {
+		actions.append(
+			button("Open", () => api.webWikis.openSnapshot(link.id), { className: "primary", title: "Open the snapshot of " + day(link.snapshot.date) + " in a window (changes there aren't saved)" }),
+			button("↗", () => api.webWikis.open(link.id), { className: "ghost", title: "Open " + link.url + " in the default browser" })
+		);
+	} else {
+		actions.append(button("Open ↗", () => api.webWikis.open(link.id), { className: "primary", title: "Open " + link.url + " in the default browser" }));
+	}
+	actions.append(more);
 	li.append(icon, info, actions);
-	li.addEventListener("dblclick", () => run(() => api.webWikis.open(link.id)));
+	li.addEventListener("dblclick", () => run(() => (link.snapshot ? api.webWikis.openSnapshot(link.id) : api.webWikis.open(link.id))));
 	li.addEventListener("contextmenu", event => {
 		event.preventDefault();
 		showMenu(webMenu(link, index, count), { x: event.clientX, y: event.clientY });
@@ -298,21 +376,44 @@ function webItem(link, index, count) {
 
 function webMenu(link, index, count) {
 	const act = action => () => run(action);
-	return [
-		{ label: "Import as new wiki…", action: act(() => openCreateWizard("html", null, link)), title: "Download it and create a local wiki folder from it" },
-		{ label: "Copy address", action: act(() => api.copyText(link.url)) },
+	const snapshot = link.snapshot;
+	const changed = link.check && link.check.result === "changed";
+	const items = [];
+	if (snapshot) {
+		items.push(
+			{ label: "Open snapshot", action: act(() => api.webWikis.openSnapshot(link.id)) },
+			{ label: "Open website ↗", action: act(() => api.webWikis.open(link.id)) },
+			"-",
+			{ label: changed ? "Update snapshot (changed)" : "Update snapshot", action: act(() => api.webWikis.saveSnapshot(link.id)), disabled: !!link.busy, title: "Download the wiki again; replaces the snapshot of " + day(snapshot.date) },
+			{ label: "Check for changes", action: act(() => api.webWikis.check(link.id)), disabled: !!link.busy },
+			{ label: "Make wiki from snapshot…", action: act(() => openCreateWizard("snapshot", null, link)), title: "Create a local wiki folder from the snapshot" },
+			{ label: "Show snapshot in " + (FILE_MANAGER[state.platform] || "file manager"), action: act(() => api.webWikis.showSnapshot(link.id)) }
+		);
+	} else {
+		items.push(
+			{ label: "Open website ↗", action: act(() => api.webWikis.open(link.id)) },
+			"-",
+			{ label: "Save snapshot", action: act(() => api.webWikis.saveSnapshot(link.id)), disabled: !!link.busy, title: "Download the wiki and keep a local copy you can open without the website" },
+			{ label: "Check for changes", action: act(() => api.webWikis.check(link.id)), disabled: !!link.busy },
+			{ label: "Mark changes as seen", action: act(() => api.webWikis.markSeen(link.id)), disabled: !changed || !!link.busy, title: "Compare future checks with the website as it is now" }
+		);
+	}
+	items.push(
 		"-",
+		{ label: "Copy address", action: act(() => api.copyText(link.url)) },
 		{ label: "Edit…", action: act(() => openLinkDialog(link)) },
 		"-",
 		{ label: "Move up", action: act(() => api.webWikis.move(link.id, -1)), disabled: index === 0 },
 		{ label: "Move down", action: act(() => api.webWikis.move(link.id, 1)), disabled: index === count - 1 },
 		"-",
 		{ label: "Remove…", action: act(async () => {
-			if (confirm("Remove the link \u201c" + link.name + "\u201d from TW Desk?\n\n" + link.url)) {
+			const note = snapshot ? "\n\nIts snapshot of " + day(snapshot.date) + " is deleted too." : "";
+			if (confirm("Remove the link “" + link.name + "” from TW Desk?\n\n" + link.url + note)) {
 				await api.webWikis.remove(link.id);
 			}
 		}) }
-	];
+	);
+	return items;
 }
 
 const linkForm = $("#link-form");
@@ -458,7 +559,10 @@ function aboutText(wiki) {
 		parts.push("copy of " + (original ? original.name : wiki.copiedFrom.name) + " · " + wiki.copiedFrom.date);
 	}
 	if (wiki.importedFrom) {
-		parts.push("imported from " + sourceLabel(wiki.importedFrom.source) + " · " + wiki.importedFrom.date);
+		const from = wiki.importedFrom;
+		parts.push(from.snapshot
+			? "from the snapshot of " + sourceLabel(from.source) + " · " + from.snapshot
+			: "imported from " + sourceLabel(from.source) + " · " + from.date);
 	}
 	if (wiki.description) {
 		parts.push(wiki.description.replace(/\s*\n\s*/g, " "));
@@ -686,6 +790,7 @@ $("#show-settings").addEventListener("click", () => {
 	settingsForm.elements.gitFetch.checked = git.fetch;
 	settingsForm.elements.gitStaleHours.value = git.staleHours;
 	settingsForm.elements.gitAutoCommit.checked = git.autoCommitOnStop;
+	settingsForm.elements.webCheck.checked = state.webCheck;
 	$("#settings-error").hidden = true;
 	$("#settings-dialog").showModal();
 });
@@ -699,7 +804,8 @@ settingsForm.addEventListener("submit", async event => {
 			gitInterval: Number(fields.gitInterval.value),
 			gitFetch: fields.gitFetch.checked,
 			gitStaleHours: Number(fields.gitStaleHours.value),
-			gitAutoCommit: fields.gitAutoCommit.checked
+			gitAutoCommit: fields.gitAutoCommit.checked,
+			webCheck: fields.webCheck.checked
 		});
 		$("#settings-dialog").close();
 	} catch (e) {
@@ -863,9 +969,10 @@ const CREATE_STEPS = { source: "Source", copy: "What to copy", location: "Locati
 const WIZARD_MODES = {
 	empty: { title: "New empty wiki", steps: ["location", "settings"], working: "Creating…" },
 	html: { title: "Wiki from HTML file or web address", steps: ["source", "location", "settings"], working: "Converting…" },
-	copy: { title: "Copy wiki", steps: ["copy", "location", "settings"], working: "Copying…" }
+	copy: { title: "Copy wiki", steps: ["copy", "location", "settings"], working: "Copying…" },
+	snapshot: { title: "Wiki from snapshot", steps: ["location", "settings"], working: "Converting…" }
 };
-const wizard = { mode: "empty", source: null, steps: [], index: 0, nameTouched: false };
+const wizard = { mode: "empty", source: null, link: null, steps: [], index: 0, nameTouched: false };
 
 function groupOptions(select, selected) {
 	select.replaceChildren(new Option("— none —", ""), ...state.groups.map(g => new Option(g.name, g.id)));
@@ -881,11 +988,12 @@ function parentOf(file) {
 	return file.replace(/[\\/][^\\/]*$/, "");
 }
 
-// mode: "empty", "html" or "copy" (source: the wiki to copy); link: a web wiki to import (mode "html")
+// mode: "empty", "html", "copy" (source: the wiki to copy) or "snapshot" (link: the web wiki whose snapshot to convert)
 async function openCreateWizard(mode, source, link) {
 	createForm.reset();
 	wizard.mode = mode;
 	wizard.source = source || null;
+	wizard.link = link || null;
 	wizard.steps = WIZARD_MODES[mode].steps;
 	wizard.index = 0;
 	wizard.nameTouched = false;
@@ -911,10 +1019,10 @@ async function openCreateWizard(mode, source, link) {
 		wizard.nameTouched = true;
 	}
 	if (link) {
-		$("#create-title").textContent = "Import \u201c" + link.name + "\u201d";
-		createForm.elements.htmlFile.value = link.url;
+		$("#create-title").textContent = "Wiki from the snapshot of \u201c" + link.name + "\u201d (" + link.snapshot.date.slice(0, 10) + ")";
 		setFolderSuggestion(folderSuggestion(link.name));
 		createForm.elements.name.value = link.name;
+		createForm.elements.description.value = link.description || "";
 		wizard.nameTouched = true;
 	}
 	showCreateStep();
@@ -1072,6 +1180,7 @@ createForm.addEventListener("submit", async event => {
 		const id = await api.createWiki({
 			htmlFile: wizard.mode === "html" ? value("htmlFile") : null,
 			copyFrom: wizard.mode === "copy" ? wizard.source.id : null,
+			webWiki: wizard.mode === "snapshot" ? wizard.link.id : null,
 			copyMode: createForm.elements.copyMode.value,
 			gitInit: wizard.mode === "copy" && createForm.elements.gitInit.checked,
 			parent: value("parent"),
@@ -1100,7 +1209,7 @@ $("#new-menu").addEventListener("click", () => showMenu([
 	{ label: "Empty wiki…", action: () => run(() => openCreateWizard("empty")), title: "Create a new, empty wiki folder" },
 	{ label: "Wiki from HTML file or web address…", action: () => run(() => openCreateWizard("html")), title: "Convert a single-file TiddlyWiki (.html file or web page) into a wiki folder" },
 	{ label: "Add existing wiki folder…", action: () => run(() => openDialog(null)), title: "A folder that contains tiddlywiki.info" },
-	{ label: "Web wiki link…", action: () => openLinkDialog(null), title: "Remember a wiki on the web: open it in the browser or import it later" },
+	{ label: "Web wiki link…", action: () => openLinkDialog(null), title: "Remember a wiki on the web: open it in the browser, keep a snapshot, see when it changes" },
 	"-",
 	{ label: "Group…", action: () => openGroupDialog(null), title: "A group to sort wikis into" }
 ], $("#new-menu")));

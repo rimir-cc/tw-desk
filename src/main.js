@@ -7,6 +7,7 @@ const path = require("path");
 const crypto = require("crypto");
 const plugins = require("./plugins");
 const git = require("./git");
+const web = require("./web");
 
 const DEFAULT_BASE_PORT = 8090;
 // Windows and (by default) macOS don't distinguish upper and lower case in paths
@@ -181,7 +182,8 @@ function snapshot() {
 		git: gitSnapshot(),
 		groups: config.groups,
 		ungroupedCollapsed: !!config.ungroupedCollapsed,
-		webWikis: config.webWikis,
+		webWikis: config.webWikis.map(l => Object.assign({}, l, { busy: webBusy.get(l.id) || null })),
+		webCheck: webCheckEnabled(),
 		webCollapsed: !!config.webCollapsed,
 		wikis: config.wikis.map(w => Object.assign({}, w, { group: groupOf(w) }, serverState(w.id), { port: activePort(w.id), url: wikiUrl(w.id) }, readIncludes(w.path)))
 	};
@@ -681,8 +683,9 @@ async function runTiddlyWikiCommand(args, serviceName) {
 	}
 }
 
-// State tiddlers of the HTML wiki that make no sense in a folder wiki
-const HTML_SKIP_FILTER = "[all[tiddlers]] -[[$:/StoryList]] -[[$:/HistoryList]] -[[$:/isEncrypted]] -[[$:/status/RequireReloadDueToPluginChange]] -[prefix[$:/temp/]]";
+// State tiddlers of the HTML wiki that make no sense in a folder wiki. $:/StoryList stays: with $:/DefaultTiddlers set to
+// e.g. [list[$:/StoryList]], a wiki opens with the river it was saved with.
+const HTML_SKIP_FILTER = "[all[tiddlers]] -[[$:/HistoryList]] -[[$:/isEncrypted]] -[[$:/status/RequireReloadDueToPluginChange]] -[prefix[$:/temp/]]";
 
 // --savewikifolder references plugins from the official library by name (so the bundled versions are used) and,
 // with explodePlugins=no, saves other plugins as single files in tiddlers/, where the Plugins window can move them to the store.
@@ -784,19 +787,35 @@ function isWebUrl(text) {
 	return /^https?:\/\//i.test(String(text || "").trim());
 }
 
-// Downloads a single-file wiki into a temporary file (Electron's net uses the system proxy settings)
-async function downloadWiki(url) {
+// Downloads a page (Electron's net uses the system proxy settings). With since (a web wiki's baseline) the server may
+// answer "not modified" instead: { notModified: true }
+async function fetchPage(url, since) {
+	const headers = {};
+	if (since && since.etag) {
+		headers["If-None-Match"] = since.etag;
+	}
+	if (since && since.lastModified) {
+		headers["If-Modified-Since"] = since.lastModified;
+	}
 	let response;
 	try {
-		response = await electronNet.fetch(url, { cache: "no-store" });
+		response = await electronNet.fetch(url, { cache: "no-store", headers });
 	} catch (e) {
 		throw new Error("Could not download " + url + ":\n" + e.message);
+	}
+	if (response.status === 304 && since) {
+		return { notModified: true };
 	}
 	if (!response.ok) {
 		throw new Error("Could not download " + url + ": HTTP " + response.status);
 	}
+	return { buffer: Buffer.from(await response.arrayBuffer()), etag: response.headers.get("etag"), lastModified: response.headers.get("last-modified") };
+}
+
+// Downloads a single-file wiki into a temporary file
+async function downloadWiki(url) {
 	const file = path.join(app.getPath("temp"), "tw-desk-download-" + crypto.randomUUID() + ".html");
-	fs.writeFileSync(file, Buffer.from(await response.arrayBuffer()));
+	fs.writeFileSync(file, (await fetchPage(url)).buffer);
 	return file;
 }
 
@@ -809,8 +828,13 @@ async function createWiki(input) {
 	if (!input.parent || !fs.existsSync(path.resolve(input.parent))) {
 		throw new Error("The folder to create the wiki in doesn't exist: " + (input.parent || "(none)"));
 	}
-	const htmlUrl = isWebUrl(input.htmlFile) ? input.htmlFile.trim() : null;
-	const htmlFile = input.htmlFile && !htmlUrl ? path.resolve(input.htmlFile) : null;
+	// A web wiki's snapshot is converted like a local file but remembered as coming from the web address
+	const link = input.webWiki ? findWebWiki(input.webWiki) : null;
+	if (link && !link.snapshot) {
+		throw new Error("\u201c" + link.name + "\u201d has no snapshot yet.");
+	}
+	const htmlUrl = !link && isWebUrl(input.htmlFile) ? input.htmlFile.trim() : null;
+	const htmlFile = link ? snapshotFile(link.id) : input.htmlFile && !htmlUrl ? path.resolve(input.htmlFile) : null;
 	if (htmlFile && !fs.existsSync(htmlFile)) {
 		throw new Error("HTML file not found: " + htmlFile);
 	}
@@ -837,7 +861,7 @@ async function createWiki(input) {
 				fs.rmSync(downloaded, { force: true });
 			}
 		} else if (htmlFile) {
-			await convertHtmlWiki(htmlFile, folder);
+			await convertHtmlWiki(htmlFile, folder, link ? link.url : htmlFile);
 		} else if (source) {
 			copyWikiFolder(path.resolve(source.path), folder, input.copyMode);
 		} else {
@@ -880,6 +904,8 @@ async function createWiki(input) {
 	if (source) {
 		// Shown in the list ("copy of …"); kept as text so it survives renaming or removing the original
 		wiki.copiedFrom = { id: source.id, name: source.name, path: path.resolve(source.path), date: today };
+	} else if (link) {
+		wiki.importedFrom = { source: link.url, date: today, snapshot: link.snapshot.date.slice(0, 10) };
 	} else if (htmlUrl || htmlFile) {
 		wiki.importedFrom = { source: htmlUrl || htmlFile, date: today };
 	}
@@ -921,8 +947,10 @@ ipcMain.handle("save-settings", (event, input) => {
 	}
 	config.basePort = basePort;
 	config.git = { interval, fetch: !!input.gitFetch, staleHours, autoCommitOnStop: !!input.gitAutoCommit };
+	config.webCheck = !!input.webCheck;
 	saveConfig();
 	scheduleGitChecks();
+	scheduleWebChecks();
 	pushState();
 });
 
@@ -1238,7 +1266,41 @@ ipcMain.handle("save-group", (event, input) => {
 });
 
 // id null is the "Ungrouped" section
-// ---------- web wikis (links to wikis on the web) ----------
+// ---------- web wikis (links to wikis on the web, with optional local snapshot) ----------
+
+// Per link, in <userData>/web/<id>/: snapshot.html (the saved copy, if any) and baseline.json (validators and tiddler
+// hashes of the version last seen: when the link was added, the snapshot saved or the changes marked as seen).
+// config: link.snapshot { date, size, tiddlers, twVersion }, link.check { date, result: same|changed|error, … }
+const WEB_CHECK_AGE = 24 * 3600 * 1000;
+const webBusy = new Map(); // link id -> "checking" | "saving" (the latest queued task)
+const webPending = new Map(); // link id -> number of queued tasks
+const snapshotWindows = new Map(); // link id -> BrowserWindow
+let webQueue = Promise.resolve();
+let webTimer = null;
+
+function webDir(id) {
+	return path.join(app.getPath("userData"), "web", id);
+}
+
+function snapshotFile(id) {
+	return path.join(webDir(id), "snapshot.html");
+}
+
+function readBaseline(link) {
+	try {
+		const baseline = JSON.parse(fs.readFileSync(path.join(webDir(link.id), "baseline.json"), "utf8"));
+		// After the address was edited the old baseline says nothing about the new one
+		return baseline.url === link.url ? baseline : null;
+	} catch (e) {
+		return null;
+	}
+}
+
+function writeBaseline(link, page, index) {
+	fs.mkdirSync(webDir(link.id), { recursive: true });
+	const baseline = Object.assign({ date: new Date().toISOString(), url: link.url, etag: page.etag || null, lastModified: page.lastModified || null }, index);
+	fs.writeFileSync(path.join(webDir(link.id), "baseline.json"), JSON.stringify(baseline));
+}
 
 function webWikiFromInput(input) {
 	let url;
@@ -1266,6 +1328,149 @@ function findWebWiki(id) {
 	return link;
 }
 
+// Downloads and comparisons run one at a time; the row shows what's going on
+function queueWeb(id, kind, task) {
+	webBusy.set(id, kind);
+	webPending.set(id, (webPending.get(id) || 0) + 1);
+	pushState();
+	const result = webQueue.then(task);
+	webQueue = result.catch(() => {}).then(() => {
+		const left = webPending.get(id) - 1;
+		if (left) {
+			webPending.set(id, left);
+		} else {
+			webPending.delete(id);
+			webBusy.delete(id);
+		}
+		pushState();
+	});
+	return result;
+}
+
+function webCheckEnabled() {
+	return config.webCheck !== false;
+}
+
+// Compares the site with the baseline; the first check (e.g. right after adding the link) only records the baseline
+async function checkWebWiki(id) {
+	let link = findWebWiki(id);
+	const baseline = readBaseline(link);
+	const check = { date: new Date().toISOString(), result: "same" };
+	try {
+		const page = await fetchPage(link.url, baseline);
+		if (!baseline) {
+			writeBaseline(link, page, web.indexOf(page.buffer));
+		} else if (!page.notModified) {
+			const index = web.indexOf(page.buffer);
+			if (index.fileHash !== baseline.fileHash) {
+				const diff = web.compare(baseline, index);
+				if (diff && !diff.added && !diff.changed && !diff.removed) {
+					// Only volatile tiddlers or the page around the tiddlers changed; remember the new file
+					writeBaseline(link, page, index);
+				} else {
+					Object.assign(check, { result: "changed" }, diff || {});
+					if (index.twVersion !== baseline.twVersion) {
+						check.twVersion = index.twVersion;
+					}
+				}
+			}
+		}
+	} catch (e) {
+		Object.assign(check, { result: "error", error: e.message });
+	}
+	// The link may have been removed meanwhile
+	link = config.webWikis.find(l => l.id === id);
+	if (link) {
+		link.check = check;
+		saveConfig();
+	}
+}
+
+async function saveSnapshot(id) {
+	const page = await fetchPage(findWebWiki(id).url);
+	const index = web.indexOf(page.buffer);
+	if (index.notWiki) {
+		throw new Error("This doesn't look like a TiddlyWiki: " + findWebWiki(id).url);
+	}
+	const link = config.webWikis.find(l => l.id === id);
+	if (!link) {
+		return;
+	}
+	const file = snapshotFile(id);
+	fs.mkdirSync(path.dirname(file), { recursive: true });
+	fs.writeFileSync(file + ".tmp", page.buffer);
+	fs.renameSync(file + ".tmp", file);
+	writeBaseline(link, page, index);
+	const date = new Date().toISOString();
+	link.snapshot = { date, size: index.size, tiddlers: index.tiddlers ? Object.keys(index.tiddlers).length : null, twVersion: index.twVersion };
+	link.check = { date, result: "same" };
+	saveConfig();
+	const win = snapshotWindows.get(id);
+	if (win && !win.isDestroyed()) {
+		win.loadFile(file);
+	}
+}
+
+// The saved copy runs on its own in an app window, without a server; changes in it aren't saved anywhere
+function openSnapshot(id) {
+	const link = findWebWiki(id);
+	if (!link.snapshot || !fs.existsSync(snapshotFile(id))) {
+		throw new Error("\u201c" + link.name + "\u201d has no snapshot yet.");
+	}
+	const existing = snapshotWindows.get(id);
+	if (existing && !existing.isDestroyed()) {
+		existing.focus();
+		return;
+	}
+	const title = link.name + " (snapshot " + link.snapshot.date.slice(0, 10) + ")";
+	const win = new BrowserWindow({
+		width: 1280,
+		height: 900,
+		title,
+		autoHideMenuBar: true,
+		webPreferences: { contextIsolation: true, nodeIntegration: false, sandbox: true }
+	});
+	const external = target => {
+		if (/^https?:/i.test(target)) {
+			shell.openExternal(target);
+		}
+	};
+	win.webContents.setWindowOpenHandler(({ url: target }) => {
+		external(target);
+		return { action: "deny" };
+	});
+	// Links within the wiki only change the #hash; anything else goes to the browser
+	win.webContents.on("will-navigate", (event, target) => {
+		event.preventDefault();
+		external(target);
+	});
+	win.on("page-title-updated", (event, pageTitle) => {
+		event.preventDefault();
+		win.setTitle(title + " — " + pageTitle);
+	});
+	win.on("closed", () => snapshotWindows.delete(id));
+	snapshotWindows.set(id, win);
+	win.loadFile(snapshotFile(id));
+}
+
+async function checkDueWebWikis(all) {
+	for (const link of config.webWikis.slice()) {
+		if (all || !link.check || Date.now() - Date.parse(link.check.date) > WEB_CHECK_AGE) {
+			await queueWeb(link.id, "checking", () => checkWebWiki(link.id)).catch(() => {});
+		}
+	}
+}
+
+// Once a day per link; the timer only looks for links that are due
+function scheduleWebChecks() {
+	clearInterval(webTimer);
+	webTimer = null;
+	if (webCheckEnabled()) {
+		webTimer = setInterval(() => checkDueWebWikis(false), 3600 * 1000);
+		setTimeout(() => webTimer && checkDueWebWikis(false), 60 * 1000);
+	}
+}
+
 ipcMain.handle("save-web-wiki", (event, input) => {
 	const link = webWikiFromInput(input);
 	const clash = config.webWikis.find(l => l.id !== link.id && l.url === link.url);
@@ -1273,24 +1478,51 @@ ipcMain.handle("save-web-wiki", (event, input) => {
 		throw new Error("This address is already in the list as \"" + clash.name + "\".");
 	}
 	const index = config.webWikis.findIndex(l => l.id === link.id);
-	if (index === -1) {
-		config.webWikis.push(link);
-	} else {
+	const previous = config.webWikis[index];
+	if (previous) {
+		for (const key of ["snapshot", "check"]) {
+			if (previous[key]) {
+				link[key] = previous[key];
+			}
+		}
 		config.webWikis[index] = link;
+	} else {
+		config.webWikis.push(link);
 	}
 	saveConfig();
 	pushState();
+	// Remember the version as of now, to tell later whether the site changed
+	if (!previous || previous.url !== link.url) {
+		delete link.check;
+		queueWeb(link.id, "checking", () => checkWebWiki(link.id)).catch(() => {});
+	}
 	return link.id;
 });
 
 ipcMain.handle("remove-web-wiki", (event, id) => {
 	config.webWikis = config.webWikis.filter(l => l.id !== id);
 	saveConfig();
+	const win = snapshotWindows.get(id);
+	if (win && !win.isDestroyed()) {
+		win.close();
+	}
+	fs.rmSync(webDir(id), { recursive: true, force: true });
 	pushState();
 });
 
 // Only addresses from the list are opened
 ipcMain.handle("open-web-wiki", (event, id) => shell.openExternal(findWebWiki(id).url));
+ipcMain.handle("open-snapshot", (event, id) => openSnapshot(id));
+ipcMain.handle("show-snapshot", (event, id) => shell.showItemInFolder(snapshotFile(findWebWiki(id).id)));
+ipcMain.handle("save-snapshot", (event, id) => queueWeb(findWebWiki(id).id, "saving", () => saveSnapshot(id)));
+ipcMain.handle("check-web-wiki", (event, id) => queueWeb(findWebWiki(id).id, "checking", () => checkWebWiki(id)));
+ipcMain.handle("check-web-wikis", () => checkDueWebWikis(true));
+
+// Without a snapshot: the current version becomes the one to compare with
+ipcMain.handle("mark-web-wiki-seen", (event, id) => queueWeb(findWebWiki(id).id, "checking", async () => {
+	fs.rmSync(path.join(webDir(id), "baseline.json"), { force: true });
+	await checkWebWiki(id);
+}));
 
 ipcMain.handle("move-web-wiki", (event, id, delta) => {
 	const index = config.webWikis.findIndex(l => l.id === id);
@@ -1392,6 +1624,7 @@ if (!app.requestSingleInstanceLock()) {
 		}
 		scheduleGitChecks();
 		checkGit({ fetch: gitSettings().fetch });
+		scheduleWebChecks();
 	});
 
 	app.on("before-quit", () => {

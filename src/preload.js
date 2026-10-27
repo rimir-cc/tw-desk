@@ -24,6 +24,8 @@ contextBridge.exposeInMainWorld("twDesk", {
 		addLibrary: url => ipcRenderer.invoke("plugins-add-library", url),
 		removeLibrary: url => ipcRenderer.invoke("plugins-remove-library", url),
 		libraryIndex: (url, refresh) => ipcRenderer.invoke("plugins-library-index", url, refresh),
+		allIndexes: refresh => ipcRenderer.invoke("plugins-all-indexes", refresh),
+		openLink: url => ipcRenderer.invoke("plugins-open-link", url),
 		install: (url, title) => ipcRenderer.invoke("plugins-install", url, title),
 		remove: (kind, name) => ipcRenderer.invoke("plugins-remove", kind, name),
 		checkUpdates: () => ipcRenderer.invoke("plugins-check-updates"),

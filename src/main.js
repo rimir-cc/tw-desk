@@ -1089,6 +1089,15 @@ ipcMain.handle("plugins-remove-library", (event, url) => {
 });
 
 ipcMain.handle("plugins-library-index", (event, url, refresh) => plugins.libraryIndex(findLibrary(url), refresh));
+ipcMain.handle("plugins-all-indexes", (event, refresh) => plugins.allIndexes(config.libraries, refresh));
+
+// Documentation and source links from library entries (web addresses only)
+ipcMain.handle("plugins-open-link", (event, url) => {
+	if (!/^https?:\/\//i.test(String(url))) {
+		throw new Error("Not a web address: " + url);
+	}
+	return shell.openExternal(String(url));
+});
 
 ipcMain.handle("plugins-install", (event, url, title) => plugins.installFromLibrary(findLibrary(url), title));
 

@@ -52,6 +52,8 @@ folders** – use copies (see Testing).
   - CPL (`https://tw-cpl.netlify.app/repo`): `<repo>/index.json`, plugin at `<repo>/<name>/latest.json`
     where `<name>` = title without `$:/plugins/` and `/` (and `:<>"|?*`) replaced by `_`.
   - Fetched with Electron `net.fetch` (uses system proxy settings).
+  - The Libraries tab searches all indexes at once (`allIndexes`; entries keep every non-text field in `fields`);
+    query parsing/ranking/grouping by title lives in `plugins-ui.js` (`parseQuery`, `scoreGroup`, `searchGroups`).
 - Writing `tiddlywiki.info` (includes, plugin lists) re-serializes it with 4-space JSON; skipped if unchanged.
 - **Copying a wiki** (`copyWikiFolder`): file copy, skipping `.git`, `output`, `$__StoryList.tid`, `$__HistoryList.json`;
   "config" mode keeps only tiddler files whose title (from `.meta` / `.tid` header / all titles of a `.json`) starts
@@ -131,7 +133,7 @@ rules everywhere, so wikis stay usable on Windows. The manager window quits the 
 
 ## State (as of 2026-10-26)
 
-- Version 0.2.11 committed (groups, descriptions, web wiki links with snapshots and change checks, update check per library, create/copy/delete wizards, automatic ports, git,
+- Version 0.2.12 committed (search across all plugin libraries, groups, descriptions, web wiki links with snapshots and change checks, update check per library, create/copy/delete wizards, automatic ports, git,
   Linux/macOS build targets, row menus and drag & drop). Builds are made by the user on Windows; this sandbox
   can't install Electron (no npm registry access). 0.2.0 was the first update from the short-path layout.
 - The user's plugins are still stored as tiddlers inside `_shared` (relink*, CPL-Repo, rimir/*,

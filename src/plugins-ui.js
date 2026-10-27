@@ -11,7 +11,6 @@ const ESSENTIAL = ["plugin|tiddlywiki/tiddlyweb", "plugin|tiddlywiki/filesystem"
 let pstate = null;
 let activeTab = "wikis";
 let updatesResult = null;
-const browse = { url: null, entries: null, filter: "" };
 
 function el(tag, props, ...children) {
 	const node = document.createElement(tag);
@@ -311,87 +310,302 @@ function renderUpdateCheck(panel) {
 	panel.append(table);
 }
 
-// ---------- Libraries tab ----------
+// ---------- Libraries tab: one search across all libraries ----------
+
+const search = { query: "", library: "", kind: "", hideInstalled: false, indexes: null, loading: null, open: new Set(), limit: 100 };
+const SEARCH_PAGE = 100;
+const ENTRY_FIELDS = ["title", "name", "author", "tags", "description", "version"];
+const FIELD_ALIASES = { tag: "tags" };
+
+// Words must all match somewhere; "a phrase" is one word; -word excludes; field:value looks in one field only
+// (title, name, author, tag, description, version or any other index field, e.g. core-version:5.3)
+function parseQuery(text) {
+	const terms = [];
+	const pattern = /(-)?(?:([\w-]+):)?(?:"([^"]*)"?|(\S+))/g;
+	let match;
+	while ((match = pattern.exec(text))) {
+		const value = (match[3] !== undefined ? match[3] : match[4] || "").toLowerCase();
+		// A lone "-" is an exclusion still being typed
+		if (value && value !== "-") {
+			const field = match[2] ? match[2].toLowerCase() : null;
+			terms.push({ exclude: !!match[1], field: field ? FIELD_ALIASES[field] || field : null, value });
+		}
+	}
+	return terms;
+}
+
+function entryText(entry, field) {
+	if (!field) {
+		if (entry.searchText === undefined) {
+			entry.searchText = [entry.title, entry.description, entry.author, entry.tags].concat(Object.values(entry.fields || {})).join("\n").toLowerCase();
+		}
+		return entry.searchText;
+	}
+	return String((ENTRY_FIELDS.includes(field) ? entry[field] : (entry.fields || {})[field]) || "").toLowerCase();
+}
+
+// One group per plugin title, with what each library offers (newest first)
+function searchGroups() {
+	const groups = new Map();
+	for (const index of search.indexes || []) {
+		if (!index.entries || (search.library && index.url !== search.library)) {
+			continue;
+		}
+		for (const entry of index.entries) {
+			if (search.kind && entry.kind !== search.kind) {
+				continue;
+			}
+			if (!groups.has(entry.title)) {
+				groups.set(entry.title, { title: entry.title, kind: entry.kind, name: entry.name, offers: [] });
+			}
+			groups.get(entry.title).offers.push({ library: index.url, entry });
+		}
+	}
+	for (const group of groups.values()) {
+		group.offers.sort((a, b) => window.compareVersionsLoose(b.entry.version, a.entry.version));
+		group.entry = group.offers[0].entry;
+	}
+	return [...groups.values()];
+}
+
+// -1 if the group doesn't match; higher is better (name > title > description > author/tags > other fields)
+function scoreGroup(group, terms) {
+	let score = 0;
+	for (const term of terms) {
+		const hit = group.offers.some(o => entryText(o.entry, term.field).includes(term.value));
+		if (term.exclude ? hit : !hit) {
+			return -1;
+		}
+		if (!term.exclude) {
+			const e = group.entry;
+			score += e.name.toLowerCase() === term.value ? 20
+				: e.title.toLowerCase().includes(term.value) ? 10
+				: e.description.toLowerCase().includes(term.value) ? 3
+				: (e.author + " " + e.tags).toLowerCase().includes(term.value) ? 2 : 1;
+		}
+	}
+	return score;
+}
+
+// Bundled / in the store (and whether a library has a newer version)
+function installedState(group) {
+	const bundled = pstate.bundled.find(p => p.title === group.title);
+	if (bundled) {
+		return { badge: el("span", { class: "badge bundled", title: "Comes with TiddlyWiki; the bundled version is always used" }, "bundled " + bundled.version), installed: true, newer: false };
+	}
+	const stored = pstate.store.find(p => p.title === group.title);
+	if (stored) {
+		const newer = window.compareVersionsLoose(group.entry.version, stored.version) > 0;
+		return { badge: el("span", { class: "badge " + (newer ? "update" : "store") }, "store " + (stored.version || "?")), installed: true, newer, stored };
+	}
+	return { badge: null, installed: false, newer: false };
+}
+
+// The text with the searched words marked
+function highlighted(text, terms) {
+	const words = terms.filter(t => !t.exclude).map(t => t.value.replace(/[.*+?^${}()|[\]\\]/g, "\\$&"));
+	if (!words.length || !text) {
+		return [text];
+	}
+	return String(text).split(new RegExp("(" + words.join("|") + ")", "gi")).map((part, i) => (i % 2 ? el("mark", {}, part) : part));
+}
+
+function loadIndexes(refresh) {
+	search.loading = papi.allIndexes(refresh).then(indexes => {
+		search.indexes = indexes;
+	}).catch(e => {
+		search.indexes = [];
+		showMessage(cleanError(e), true);
+	}).finally(() => {
+		search.loading = null;
+		if (activeTab === "libraries") {
+			renderPlugins();
+		}
+	});
+	return search.loading;
+}
 
 function renderLibrariesTab() {
 	const panel = $("#tab-libraries");
-	panel.replaceChildren(el("h3", {}, "Libraries"));
+	if (!search.indexes && !search.loading) {
+		loadIndexes(false);
+	}
+	const input = el("input", { type: "search", class: "library-search", placeholder: "Search all libraries – e.g. relink, author:flibbles, tag:editor, \"table of contents\", -theme", value: search.query });
+	const librarySelect = el("select", { title: "Search in" },
+		el("option", { value: "" }, "All libraries"),
+		pstate.libraries.map(l => el("option", { value: l.url }, libraryLabel(l.url))));
+	librarySelect.value = search.library;
+	const kindSelect = el("select", { title: "Kind" },
+		el("option", { value: "" }, "Plugins, themes, languages"),
+		el("option", { value: "plugin" }, "Plugins"),
+		el("option", { value: "theme" }, "Themes"),
+		el("option", { value: "language" }, "Languages"));
+	kindSelect.value = search.kind;
+	const hide = el("input", { type: "checkbox", checked: search.hideInstalled });
+	const results = el("div", { class: "search-results" });
+	const update = () => {
+		search.limit = SEARCH_PAGE;
+		renderSearchResults(results);
+	};
+	input.addEventListener("input", () => {
+		search.query = input.value;
+		update();
+	});
+	librarySelect.addEventListener("change", () => {
+		search.library = librarySelect.value;
+		update();
+	});
+	kindSelect.addEventListener("change", () => {
+		search.kind = kindSelect.value;
+		update();
+	});
+	hide.addEventListener("change", () => {
+		search.hideInstalled = hide.checked;
+		update();
+	});
+	panel.replaceChildren(
+		el("div", { class: "add-row" }, input, actionButton("Reload", async () => {
+			await loadIndexes(true);
+			return "Reloaded all libraries.";
+		}, { class: "ghost", title: "Fetch the libraries' lists again" })),
+		el("div", { class: "add-row search-filters" }, librarySelect, kindSelect, el("label", { class: "inline small" }, hide, " hide installed")),
+		results,
+		renderLibraryManagement());
+	renderSearchResults(results);
+	input.focus();
+}
+
+function renderSearchResults(container) {
+	if (!search.indexes) {
+		container.replaceChildren(el("p", { class: "muted" }, "Loading the libraries…"));
+		return;
+	}
+	const terms = parseQuery(search.query);
+	const matches = searchGroups()
+		.map(group => ({ group, score: terms.length ? scoreGroup(group, terms) : 0, state: null }))
+		.filter(m => m.score >= 0)
+		.map(m => Object.assign(m, { state: installedState(m.group) }))
+		.filter(m => !search.hideInstalled || !m.state.installed || m.state.newer)
+		.sort((a, b) => b.score - a.score || a.group.name.localeCompare(b.group.name));
+	const errors = search.indexes.filter(i => i.error);
+	const read = search.indexes.filter(i => i.entries && (!search.library || i.url === search.library)).length;
+	const summary = el("div", { class: "muted small" },
+		matches.length + (matches.length === 1 ? " match" : " matches") + " in " + read + (read === 1 ? " library" : " libraries")
+		+ (terms.length ? "" : " (everything; type to search)"));
+	const parts = [summary];
+	for (const failed of errors) {
+		parts.push(el("div", { class: "error small" }, "Could not read " + failed.url + ": " + failed.error));
+	}
+	const table = el("table", { class: "plugin-table search-table" });
+	for (const { group, state } of matches.slice(0, search.limit)) {
+		appendSearchRow(table, group, state, terms);
+	}
+	parts.push(table);
+	if (matches.length > search.limit) {
+		parts.push(el("button", { type: "button", class: "ghost", onclick: () => {
+			search.limit += SEARCH_PAGE;
+			renderSearchResults(container);
+		} }, "Show more (" + (matches.length - search.limit) + " left)"));
+	}
+	container.replaceChildren(...parts);
+}
+
+function appendSearchRow(table, group, state, terms) {
+	const e = group.entry;
+	const open = search.open.has(group.title);
+	const byline = [e.author ? "by " + e.author : "", e.tags ? "tags: " + e.tags : ""].filter(Boolean).join(" · ");
+	const nameCell = el("td", { class: "search-name", title: open ? "Hide details" : "Show all fields" },
+		el("span", { class: "toggle" }, open ? "▾ " : "▸ "),
+		kindLabel(group.kind), highlighted(group.name, terms),
+		e.description ? el("div", { class: "desc" }, highlighted(e.description, terms)) : null,
+		byline ? el("div", { class: "desc small" }, highlighted(byline, terms)) : null);
+	nameCell.addEventListener("click", () => {
+		if (open) {
+			search.open.delete(group.title);
+		} else {
+			search.open.add(group.title);
+		}
+		renderSearchResults(table.parentNode);
+	});
+	const installedVersion = state.stored ? state.stored.version : null;
+	const offers = group.offers.map(o => el("span", {
+		class: "badge" + (installedVersion && window.compareVersionsLoose(o.entry.version, installedVersion) > 0 ? " update" : ""),
+		title: libraryLabel(o.library) + " offers " + (o.entry.version || "no version")
+	}, libraryLabel(o.library) + " " + (o.entry.version || "?")));
+	// One button per library with a version worth installing (newest first)
+	let actions = null;
+	if (!pstate.bundled.find(p => p.title === group.title)) {
+		const candidates = group.offers.filter(o => !installedVersion || window.compareVersionsLoose(o.entry.version, installedVersion) > 0);
+		const several = new Set(candidates.map(o => o.entry.version)).size > 1 || candidates.length > 1;
+		actions = candidates.map((o, i) => actionButton((installedVersion ? "Update → " + o.entry.version : "Install") + (several ? " from " + libraryLabel(o.library) : ""), async () => {
+			const result = await papi.install(o.library, group.title);
+			return (installedVersion ? "Updated " : "Installed ") + result.title + " " + result.version + " from " + libraryLabel(o.library) + " into the store."
+				+ (installedVersion ? " Restart the wikis using it to load the new version." : " Add it to wikis in the Wikis tab.");
+		}, { class: i === 0 ? "primary" : "", title: "Into the shared store, from " + o.library }));
+	}
+	table.append(el("tr", {},
+		nameCell,
+		el("td", {}, el("div", { class: "offers" }, offers)),
+		el("td", {}, state.badge),
+		el("td", { class: "actions-cell" }, actions)));
+	if (open) {
+		table.append(el("tr", { class: "search-details" }, el("td", { colSpan: 4 }, group.offers.map(o => entryDetails(o, terms)))));
+	}
+}
+
+// All index fields of one library's entry; web addresses open in the browser
+function entryDetails(offer, terms) {
+	const fields = Object.assign({ title: offer.entry.title }, offer.entry.fields);
+	const list = el("dl", { class: "entry-fields" });
+	for (const key of Object.keys(fields).sort()) {
+		const value = fields[key];
+		const links = value.match(/https?:\/\/[^\s<>"'\]]+/g);
+		list.append(el("dt", {}, key), el("dd", {},
+			links && links.length === 1 && links[0] === value.trim()
+				? el("a", { href: "#", onclick: event => {
+					event.preventDefault();
+					run(() => papi.openLink(links[0]));
+				} }, value)
+				: highlighted(value, terms)));
+	}
+	return el("div", { class: "entry-library" }, el("div", { class: "small muted" }, libraryLabel(offer.library) + " · " + offer.library), list);
+}
+
+function renderLibraryManagement() {
+	const details = el("details", { class: "library-management", open: !pstate.libraries.length },
+		el("summary", {}, "Libraries (" + pstate.libraries.length + ")"));
 	const table = el("table", { class: "plugin-table" });
 	for (const library of pstate.libraries) {
+		const index = (search.indexes || []).find(i => i.url === library.url);
+		const count = !index ? "" : index.error ? "not readable" : index.entries.length + " entries";
 		table.append(el("tr", {},
-			el("td", {}, library.url),
+			el("td", {}, library.url, el("div", { class: "desc" }, count)),
 			el("td", {}, el("span", { class: "badge" }, library.type === "cpl" ? "CPL" : "TiddlyWiki library")),
 			el("td", { class: "actions-cell" },
-				actionButton("Browse", async () => {
-					browse.url = library.url;
-					browse.entries = await papi.libraryIndex(library.url, false);
-					return browse.entries.length + " entries in " + library.url;
-				}),
+				actionButton("Search only this", async () => {
+					search.library = library.url;
+					search.limit = SEARCH_PAGE;
+					return "";
+				}, { class: "ghost" }),
 				actionButton("Remove", async () => {
 					if (!confirm("Remove this library?\n" + library.url)) {
 						return "";
 					}
 					await papi.removeLibrary(library.url);
-					if (browse.url === library.url) {
-						browse.url = null;
-						browse.entries = null;
+					if (search.library === library.url) {
+						search.library = "";
 					}
+					search.indexes = search.indexes && search.indexes.filter(i => i.url !== library.url);
 					return "Removed library.";
 				}, { class: "ghost danger" }))));
 	}
-	panel.append(table);
 	const urlInput = el("input", { placeholder: "Library URL, e.g. https://tiddlywiki.com/library/v" + pstate.twVersion + "/index.html" });
-	panel.append(el("div", { class: "add-row" }, urlInput, actionButton("Add library", async () => {
+	details.append(table, el("div", { class: "add-row" }, urlInput, actionButton("Add library", async () => {
 		const library = await papi.addLibrary(urlInput.value);
+		search.indexes = null;
 		return "Added " + library.url + ".";
 	})));
-
-	if (!browse.url || !browse.entries) {
-		return;
-	}
-	panel.append(el("h3", {}, "Browse: " + browse.url));
-	const search = el("input", { type: "search", placeholder: "Filter by name or description", value: browse.filter });
-	const results = el("div");
-	const renderResults = () => {
-		const filter = browse.filter.toLowerCase();
-		const matches = browse.entries.filter(e => !filter || (e.title + " " + e.description + " " + e.author).toLowerCase().includes(filter));
-		const list = el("table", { class: "plugin-table" });
-		for (const entry of matches.slice(0, 200)) {
-			const bundled = pstate.bundled.find(p => p.title === entry.title);
-			const stored = pstate.store.find(p => p.title === entry.title);
-			let status = null;
-			let action = null;
-			if (bundled) {
-				status = el("span", { class: "badge bundled" }, "bundled " + bundled.version);
-			} else if (stored) {
-				const newer = window.compareVersionsLoose(entry.version, stored.version) > 0;
-				status = el("span", { class: "badge " + (newer ? "update" : "store") }, "store " + stored.version);
-				action = newer ? actionButton("Update to " + entry.version, () => installEntry(entry)) : null;
-			} else {
-				action = actionButton("Install", () => installEntry(entry), { class: "primary" });
-			}
-			list.append(el("tr", {},
-				el("td", {}, kindLabel(entry.kind) + entry.title.replace(/^\$:\/(plugins|themes|languages)\//, ""), el("div", { class: "desc" }, entry.description)),
-				el("td", {}, el("span", { class: "badge" }, entry.version || "?")),
-				el("td", {}, status),
-				el("td", { class: "actions-cell" }, action)));
-		}
-		results.replaceChildren(el("div", { class: "muted small" }, matches.length + " matching" + (matches.length > 200 ? ", showing the first 200" : "")), list);
-	};
-	search.addEventListener("input", () => {
-		browse.filter = search.value;
-		renderResults();
-	});
-	panel.append(el("div", { class: "add-row" }, search, actionButton("Reload", async () => {
-		browse.entries = await papi.libraryIndex(browse.url, true);
-		return "Reloaded " + browse.entries.length + " entries.";
-	})), results);
-	renderResults();
-}
-
-async function installEntry(entry) {
-	const result = await papi.install(browse.url, entry.title);
-	return "Installed " + result.title + " " + result.version + " into the store. Add it to wikis in the Wikis tab.";
+	return details;
 }
 
 // Version comparison for the UI (main process has the same logic)

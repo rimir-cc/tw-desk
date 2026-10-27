@@ -264,10 +264,22 @@ function standardBase(url) {
 	return base.endsWith("/") ? base : base + "/";
 }
 
+// Index fields worth searching and showing (everything but the plugin text, shortened)
+function extraFields(entry) {
+	const fields = {};
+	for (const [key, value] of Object.entries(entry)) {
+		const text = Array.isArray(value) ? value.join(" ") : value !== null && typeof value === "object" ? "" : String(value === undefined || value === null ? "" : value);
+		if (key !== "text" && key !== "title" && text) {
+			fields[key] = text.slice(0, 2000);
+		}
+	}
+	return fields;
+}
+
 function normalizeEntries(list, type) {
 	return (Array.isArray(list) ? list : [])
 		.map(entry => {
-			const parsed = parseTitle(entry.title);
+			const parsed = entry && typeof entry.title === "string" ? parseTitle(entry.title) : null;
 			if (!parsed) {
 				return null;
 			}
@@ -275,9 +287,11 @@ function normalizeEntries(list, type) {
 				title: entry.title,
 				kind: parsed.kind,
 				name: parsed.name,
-				version: entry.version || "",
-				description: entry.description || "",
-				author: entry.author || "",
+				version: String(entry.version || ""),
+				description: String(entry.description || ""),
+				author: String(entry.author || ""),
+				tags: String(entry.tags || ""),
+				fields: extraFields(entry),
 				type
 			};
 		})
@@ -321,6 +335,17 @@ async function libraryIndex(library, refresh) {
 		: normalizeEntries(await fetchJson(standardBase(library.url) + "recipes/library/tiddlers.json"), "tiddlywiki");
 	indexCache.set(library.url, { entries, fetched: Date.now() });
 	return entries;
+}
+
+// Every library's index for the search: [{ url, type, entries } | { url, type, error }]
+function allIndexes(libraries, refresh) {
+	return Promise.all(libraries.map(async library => {
+		try {
+			return { url: library.url, type: library.type, entries: await libraryIndex(library, refresh) };
+		} catch (e) {
+			return { url: library.url, type: library.type, error: e.message };
+		}
+	}));
 }
 
 function pluginUrl(library, title) {
@@ -512,6 +537,7 @@ function moveToStore(folder, file) {
 }
 
 module.exports = {
+	allIndexes,
 	KINDS,
 	init,
 	storePath,

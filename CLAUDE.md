@@ -75,6 +75,10 @@ folders** – use copies (see Testing).
   window; every navigation away goes to the browser. *Make wiki from snapshot* converts the local file and sets
   `importedFrom: { source: url, date, snapshot }`. The HTML conversion keeps `$:/StoryList` (river of
   `[list[$:/StoryList]]` wikis).
+- **Plugin showcases** (`link.showcase`): plugin tiddlers are read from the snapshot (`snapshotPluginTiddlers`, cached by
+  mtime) and offered as extra sources with the URL `showcase:<link id>` – in `plugins-all-indexes`, the update check
+  (`checkUpdates(…, extraIndexes)`) and `plugins-install` (→ `installFromShowcase`, store meta `library: "showcase:<id>"`).
+  `libraryLabel()` in plugins-ui.js turns these into "showcase <name>".
 - **Ports are automatic** (since 0.2.3): `config.basePort` + per wiki optional `fixedPort` and remembered
   `lastPort`. On start: fixed port, else `lastPort` if free, else the next free port from `basePort` – skipping other
   wikis' fixed and active ports and, if possible, their `lastPort`s (keeps URLs stable). Port choice is serialized
@@ -133,7 +137,7 @@ rules everywhere, so wikis stay usable on Windows. The manager window quits the 
 
 ## State (as of 2026-10-26)
 
-- Version 0.2.12 committed (search across all plugin libraries, groups, descriptions, web wiki links with snapshots and change checks, update check per library, create/copy/delete wizards, automatic ports, git,
+- Version 0.2.13 committed (plugin showcases, search across all plugin libraries, groups, descriptions, web wiki links with snapshots and change checks, update check per library, create/copy/delete wizards, automatic ports, git,
   Linux/macOS build targets, row menus and drag & drop). Builds are made by the user on Windows; this sandbox
   can't install Electron (no npm registry access). 0.2.0 was the first update from the short-path layout.
 - The user's plugins are still stored as tiddlers inside `_shared` (relink*, CPL-Repo, rimir/*,

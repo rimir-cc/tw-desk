@@ -20,7 +20,7 @@ const TW_PROCESS = path.join(__dirname, "tw-process.js");
 const TW_VERSION = require("tiddlywiki/package.json").version;
 
 let managerWindow = null;
-let config = { basePort: DEFAULT_BASE_PORT, groups: [], wikis: [], webWikis: [] };
+let config = { basePort: DEFAULT_BASE_PORT, groups: [], wikis: [], webWikis: [], libraries: [] };
 const servers = new Map(); // wiki id -> { child, status, logs, error }
 const wikiWindows = new Map(); // wiki id -> BrowserWindow
 let quitting = false;
@@ -182,7 +182,7 @@ function snapshot() {
 		git: gitSnapshot(),
 		groups: config.groups,
 		ungroupedCollapsed: !!config.ungroupedCollapsed,
-		webWikis: config.webWikis.map(l => Object.assign({}, l, { busy: webBusy.get(l.id) || null })),
+		webWikis: config.webWikis.map(l => Object.assign({}, l, { busy: webBusy.get(l.id) || null }, l.showcase ? { pluginCount: snapshotPluginTiddlers(l).length } : {})),
 		webCheck: webCheckEnabled(),
 		webCollapsed: !!config.webCollapsed,
 		wikis: config.wikis.map(w => Object.assign({}, w, { group: groupOf(w) }, serverState(w.id), { port: activePort(w.id), url: wikiUrl(w.id) }, readIncludes(w.path)))
@@ -1050,12 +1050,58 @@ function findLibrary(url) {
 	return library;
 }
 
+// ---------- plugin showcases (web wikis marked as such; their plugins come from the snapshot) ----------
+
+// Showcases act as extra plugin sources named "showcase:<link id>" (installs, update offers, store bookkeeping)
+const SHOWCASE_PREFIX = "showcase:";
+const showcaseCache = new Map(); // link id -> { mtime, tiddlers } (plugin tiddlers of the snapshot, with their text)
+
+function snapshotPluginTiddlers(link) {
+	let mtime;
+	try {
+		mtime = fs.statSync(snapshotFile(link.id)).mtimeMs;
+	} catch (e) {
+		return [];
+	}
+	const cached = showcaseCache.get(link.id);
+	if (cached && cached.mtime === mtime) {
+		return cached.tiddlers;
+	}
+	const parsed = web.readTiddlers(fs.readFileSync(snapshotFile(link.id), "utf8"));
+	const tiddlers = ((parsed && parsed.tiddlers) || []).filter(t => typeof t["plugin-type"] === "string" && plugins.parseTitle(t.title));
+	showcaseCache.set(link.id, { mtime, tiddlers });
+	return tiddlers;
+}
+
+function showcaseIndexes() {
+	return config.webWikis.filter(l => l.showcase).map(link => ({
+		url: SHOWCASE_PREFIX + link.id,
+		type: "showcase",
+		id: link.id,
+		name: link.name,
+		site: link.url,
+		description: link.description || "",
+		snapshot: link.snapshot ? link.snapshot.date : null,
+		entries: plugins.normalizeEntries(snapshotPluginTiddlers(link), "showcase")
+	}));
+}
+
+function installFromShowcase(id, title) {
+	const link = findWebWiki(id);
+	const fields = snapshotPluginTiddlers(link).find(t => t.title === title);
+	if (!fields) {
+		throw new Error(title + " is not in the snapshot of \u201c" + link.name + "\u201d.");
+	}
+	return plugins.writeToStore(fields, { library: SHOWCASE_PREFIX + id });
+}
+
 function pluginsState() {
 	return {
 		storePath: plugins.storePath(),
 		backupPath: path.join(app.getPath("userData"), "backup"),
 		twVersion: TW_VERSION,
 		libraries: config.libraries,
+		showcases: showcaseIndexes(),
 		store: plugins.listStore(),
 		bundled: plugins.listBundled(),
 		folders: knownFolders().map(folder => {
@@ -1089,7 +1135,7 @@ ipcMain.handle("plugins-remove-library", (event, url) => {
 });
 
 ipcMain.handle("plugins-library-index", (event, url, refresh) => plugins.libraryIndex(findLibrary(url), refresh));
-ipcMain.handle("plugins-all-indexes", (event, refresh) => plugins.allIndexes(config.libraries, refresh));
+ipcMain.handle("plugins-all-indexes", async (event, refresh) => (await plugins.allIndexes(config.libraries, refresh)).concat(showcaseIndexes()));
 
 // Documentation and source links from library entries (web addresses only)
 ipcMain.handle("plugins-open-link", (event, url) => {
@@ -1099,7 +1145,9 @@ ipcMain.handle("plugins-open-link", (event, url) => {
 	return shell.openExternal(String(url));
 });
 
-ipcMain.handle("plugins-install", (event, url, title) => plugins.installFromLibrary(findLibrary(url), title));
+ipcMain.handle("plugins-install", (event, url, title) => url.startsWith(SHOWCASE_PREFIX)
+	? installFromShowcase(url.slice(SHOWCASE_PREFIX.length), title)
+	: plugins.installFromLibrary(findLibrary(url), title));
 
 ipcMain.handle("plugins-remove", (event, kind, name) => {
 	const key = plugins.KINDS[kind].infoKey;
@@ -1119,7 +1167,7 @@ ipcMain.handle("plugins-remove", (event, kind, name) => {
 ipcMain.handle("plugins-check-updates", () => {
 	const state = pluginsState();
 	const installed = state.store.concat(...state.folders.map(f => f.stored.map(p => Object.assign({ folder: f.name }, p))));
-	return plugins.checkUpdates(config.libraries, installed);
+	return plugins.checkUpdates(config.libraries, installed, showcaseIndexes());
 });
 
 ipcMain.handle("plugins-set-list", (event, folderPath, kind, names) => {
@@ -1322,6 +1370,9 @@ function webWikiFromInput(input) {
 		throw new Error("Only http and https addresses are supported.");
 	}
 	const link = { id: input.id || crypto.randomUUID(), name: String(input.name || "").trim() || url.host, url: url.href };
+	if (input.showcase) {
+		link.showcase = true;
+	}
 	const description = String(input.description || "").trim().slice(0, 2000);
 	if (description) {
 		link.description = description;
@@ -1516,6 +1567,7 @@ ipcMain.handle("remove-web-wiki", (event, id) => {
 		win.close();
 	}
 	fs.rmSync(webDir(id), { recursive: true, force: true });
+	showcaseCache.delete(id);
 	pushState();
 });
 

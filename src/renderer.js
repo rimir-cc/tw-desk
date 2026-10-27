@@ -340,6 +340,13 @@ function webItem(link, index, count) {
 			: Object.assign(document.createElement("span"), { className: "git-chip", textContent: status.text });
 		name.append(chip);
 	}
+	if (link.showcase) {
+		const plugins = link.snapshot ? link.pluginCount + (link.pluginCount === 1 ? " plugin" : " plugins") : "no snapshot yet";
+		name.append(button("showcase · " + plugins, () => openPluginsTab("showcases"), {
+			className: "git-chip showcase-chip",
+			title: "Plugin showcase: its plugins are listed in Plugins → Showcases" + (link.snapshot ? "" : " once you save a snapshot")
+		}));
+	}
 	info.append(name);
 	if (link.description) {
 		const line = document.createElement("div");
@@ -398,6 +405,9 @@ function webMenu(link, index, count) {
 			{ label: "Mark changes as seen", action: act(() => api.webWikis.markSeen(link.id)), disabled: !changed || !!link.busy, title: "Compare future checks with the website as it is now" }
 		);
 	}
+	if (link.showcase) {
+		items.push({ label: "Plugins in this showcase…", action: act(() => openPluginsTab("showcases")) });
+	}
 	items.push(
 		"-",
 		{ label: "Copy address", action: act(() => api.copyText(link.url)) },
@@ -427,6 +437,7 @@ function openLinkDialog(link) {
 	linkForm.elements.url.value = link ? link.url : "";
 	linkForm.elements.name.value = link ? link.name : "";
 	linkForm.elements.description.value = link && link.description ? link.description : "";
+	linkForm.elements.showcase.checked = !!(link && link.showcase);
 	$("#link-dialog").showModal();
 	linkForm.elements.url.focus();
 }
@@ -438,7 +449,8 @@ linkForm.addEventListener("submit", async event => {
 			id: editingLinkId,
 			url: linkForm.elements.url.value,
 			name: linkForm.elements.name.value,
-			description: linkForm.elements.description.value
+			description: linkForm.elements.description.value,
+			showcase: linkForm.elements.showcase.checked
 		});
 		$("#link-dialog").close();
 	} catch (e) {

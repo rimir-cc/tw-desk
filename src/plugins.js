@@ -374,12 +374,13 @@ async function installFromLibrary(library, title) {
 // For every plugin found in the store or stored inside wiki folders: newest version in any library
 // Adds to each installed plugin the versions the libraries offer (newest first).
 // A plugin can be in several libraries; the UI decides what counts as an update.
-async function checkUpdates(libraries, installed) {
+// extraIndexes: further sources with their entries already read ([{ url, entries }], e.g. plugin showcases)
+async function checkUpdates(libraries, installed, extraIndexes = []) {
 	const errors = [];
 	const offers = new Map(); // title -> Map(library url -> version)
-	for (const library of libraries) {
+	for (const library of libraries.concat(extraIndexes)) {
 		try {
-			for (const entry of await libraryIndex(library, true)) {
+			for (const entry of library.entries || await libraryIndex(library, true)) {
 				if (!offers.has(entry.title)) {
 					offers.set(entry.title, new Map());
 				}
@@ -398,7 +399,7 @@ async function checkUpdates(libraries, installed) {
 			.map(([library, version]) => ({ library, version }))
 			.sort((a, b) => compareVersions(b.version, a.version))
 	}));
-	return { results, errors, librariesChecked: libraries.length - errors.length };
+	return { results, errors, librariesChecked: libraries.length - errors.length, showcasesChecked: extraIndexes.length };
 }
 
 // ---------- tiddlywiki.info plugin lists ----------
@@ -552,6 +553,8 @@ module.exports = {
 	libraryIndex,
 	installFromLibrary,
 	checkUpdates,
+	normalizeEntries,
+	writeToStore,
 	folderLists,
 	setFolderList,
 	listStoredInWiki,

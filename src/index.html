@@ -205,6 +205,7 @@
 		<label>Description <small class="muted">(optional)</small>
 			<textarea name="description" rows="3" maxlength="2000" placeholder="What is it about, and why did you collect it?"></textarea>
 		</label>
+		<label class="inline"><input name="showcase" type="checkbox"> Plugin showcase – list its plugins in the Plugins window (from the snapshot)</label>
 		<p id="link-error" class="error" hidden></p>
 		<div class="actions">
 			<button type="button" id="cancel-link">Cancel</button>
@@ -243,6 +244,7 @@
 			<button type="button" data-tab="wikis" class="tab">Wikis</button>
 			<button type="button" data-tab="store" class="tab">Store</button>
 			<button type="button" data-tab="libraries" class="tab">Libraries</button>
+			<button type="button" data-tab="showcases" class="tab">Showcases</button>
 		</nav>
 		<span class="spacer"></span>
 		<button type="button" id="close-plugins">Close</button>
@@ -251,6 +253,7 @@
 	<section id="tab-wikis" class="tab-panel"></section>
 	<section id="tab-store" class="tab-panel"></section>
 	<section id="tab-libraries" class="tab-panel"></section>
+	<section id="tab-showcases" class="tab-panel"></section>
 </dialog>
 
 <script src="menu.js"></script>

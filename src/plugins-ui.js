@@ -190,7 +190,7 @@ function renderStoreTab() {
 		table.append(el("tr", {},
 			el("td", {}, plugin.title, el("div", { class: "desc" }, plugin.description)),
 			el("td", {}, el("span", { class: "badge store" }, plugin.version || "no version")),
-			el("td", { class: "small muted" }, plugin.library ? "from " + new URL(plugin.library).host : "local", el("div", {}, users.length ? "used by " + users.join(", ") : "not used")),
+			el("td", { class: "small muted" }, plugin.library ? "from " + libraryLabel(plugin.library) : "local", el("div", {}, users.length ? "used by " + users.join(", ") : "not used"), demoButtons(plugin.title)),
 			el("td", { class: "actions-cell" }, actionButton("Remove", async () => {
 				if (!confirm("Remove " + plugin.title + " from the store?")) {
 					return "";
@@ -233,6 +233,10 @@ function updateStatus(result) {
 
 // Short name for a library; the path is added when two libraries share a host
 function libraryLabel(url) {
+	if (url.startsWith("showcase:")) {
+		const showcase = pstate.showcases.find(sc => sc.url === url);
+		return "showcase " + (showcase ? showcase.name : "(removed)");
+	}
 	const host = u => {
 		try {
 			return new URL(u).host;
@@ -260,7 +264,9 @@ function updateSummary() {
 		parts.push(counts.unversioned + " without version (not checked)");
 	}
 	const libraries = updatesResult.librariesChecked;
-	return "Compared " + updatesResult.results.length + " installed plugins with " + libraries + (libraries === 1 ? " library: " : " libraries: ") + parts.join(", ") + "."
+	const showcases = updatesResult.showcasesChecked || 0;
+	return "Compared " + updatesResult.results.length + " installed plugins with " + libraries + (libraries === 1 ? " library" : " libraries")
+		+ (showcases ? " and " + showcases + (showcases === 1 ? " showcase" : " showcases") : "") + ": " + parts.join(", ") + "."
 		+ (updatesResult.errors.length ? "\nCould not read:\n" + updatesResult.errors.join("\n") : "");
 }
 
@@ -432,8 +438,9 @@ function renderLibrariesTab() {
 	}
 	const input = el("input", { type: "search", class: "library-search", placeholder: "Search all libraries – e.g. relink, author:flibbles, tag:editor, \"table of contents\", -theme", value: search.query });
 	const librarySelect = el("select", { title: "Search in" },
-		el("option", { value: "" }, "All libraries"),
-		pstate.libraries.map(l => el("option", { value: l.url }, libraryLabel(l.url))));
+		el("option", { value: "" }, "All libraries and showcases"),
+		el("optgroup", { label: "Libraries" }, pstate.libraries.map(l => el("option", { value: l.url }, libraryLabel(l.url)))),
+		pstate.showcases.length ? el("optgroup", { label: "Showcases" }, pstate.showcases.map(sc => el("option", { value: sc.url }, sc.name))) : null);
 	librarySelect.value = search.library;
 	const kindSelect = el("select", { title: "Kind" },
 		el("option", { value: "" }, "Plugins, themes, languages"),
@@ -488,9 +495,11 @@ function renderSearchResults(container) {
 		.filter(m => !search.hideInstalled || !m.state.installed || m.state.newer)
 		.sort((a, b) => b.score - a.score || a.group.name.localeCompare(b.group.name));
 	const errors = search.indexes.filter(i => i.error);
-	const read = search.indexes.filter(i => i.entries && (!search.library || i.url === search.library)).length;
+	const read = search.indexes.filter(i => i.entries && i.type !== "showcase" && (!search.library || i.url === search.library)).length;
+	const showcases = search.indexes.filter(i => i.type === "showcase" && i.entries.length && (!search.library || i.url === search.library)).length;
 	const summary = el("div", { class: "muted small" },
 		matches.length + (matches.length === 1 ? " match" : " matches") + " in " + read + (read === 1 ? " library" : " libraries")
+		+ (showcases ? " and " + showcases + (showcases === 1 ? " showcase" : " showcases") : "")
 		+ (terms.length ? "" : " (everything; type to search)"));
 	const parts = [summary];
 	for (const failed of errors) {
@@ -547,7 +556,7 @@ function appendSearchRow(table, group, state, terms) {
 		nameCell,
 		el("td", {}, el("div", { class: "offers" }, offers)),
 		el("td", {}, state.badge),
-		el("td", { class: "actions-cell" }, actions)));
+		el("td", { class: "actions-cell" }, actions, demoButtons(group.title))));
 	if (open) {
 		table.append(el("tr", { class: "search-details" }, el("td", { colSpan: 4 }, group.offers.map(o => entryDetails(o, terms)))));
 	}
@@ -608,6 +617,99 @@ function renderLibraryManagement() {
 	return details;
 }
 
+// ---------- Showcases tab ----------
+
+// "Demo" buttons for the showcases whose snapshot contains the plugin (open the snapshot)
+function demoButtons(title) {
+	return pstate.showcases
+		.filter(sc => sc.snapshot && sc.entries.some(e => e.title === title))
+		.map(sc => el("button", { type: "button", class: "ghost demo", title: "Open the showcase \u201c" + sc.name + "\u201d (snapshot " + sc.snapshot.slice(0, 10) + ")",
+			onclick: event => {
+				event.stopPropagation();
+				run(() => api.webWikis.openSnapshot(sc.id));
+			} }, "Demo" + (pstate.showcases.length > 1 ? ": " + sc.name : "")));
+}
+
+function renderShowcasesTab() {
+	const panel = $("#tab-showcases");
+	panel.replaceChildren(el("p", { class: "muted small" },
+		"Web wikis marked as plugin showcase (Edit… on a web wiki in the main window). Their plugins come from the saved snapshot and can be added to the store from there – useful for plugins that aren't in any library. Showcases also count in the library search and the update check."));
+	if (!pstate.showcases.length) {
+		panel.append(el("p", { class: "muted" }, "No showcases yet. In the main window, add a web wiki link (+ New → Web wiki link…) and tick \u201cPlugin showcase\u201d."));
+		return;
+	}
+	for (const showcase of pstate.showcases) {
+		const card = el("div", { class: "card" });
+		card.append(el("div", { class: "card-title" },
+			el("strong", {}, showcase.name),
+			el("span", { class: "muted small" }, showcase.site),
+			el("span", { class: "spacer" }),
+			showcase.snapshot ? el("button", { type: "button", class: "primary", onclick: () => run(() => api.webWikis.openSnapshot(showcase.id)) }, "Open demo") : null,
+			el("button", { type: "button", class: "ghost", onclick: () => run(() => api.webWikis.open(showcase.id)) }, "Website ↗"),
+			actionButton(showcase.snapshot ? "Update snapshot" : "Save snapshot", async () => {
+				await api.webWikis.saveSnapshot(showcase.id);
+				search.indexes = null;
+				return "Saved the snapshot of " + showcase.name + ".";
+			}, { class: "ghost" })));
+		if (showcase.description) {
+			card.append(el("div", { class: "desc small" }, showcase.description));
+		}
+		if (!showcase.snapshot) {
+			card.append(el("p", { class: "muted small" }, "No snapshot yet – save one to see its plugins."));
+			panel.append(card);
+			continue;
+		}
+		const entries = showcase.entries.slice().sort((a, b) => (a.kind + a.name).localeCompare(b.kind + b.name));
+		card.append(el("div", { class: "muted small" }, "Snapshot of " + showcase.snapshot.slice(0, 10) + ": " + entries.length + (entries.length === 1 ? " plugin, theme or language" : " plugins, themes and languages")));
+		const table = el("table", { class: "plugin-table" });
+		for (const entry of entries) {
+			const bundled = pstate.bundled.find(p => p.title === entry.title);
+			const stored = pstate.store.find(p => p.title === entry.title);
+			let status = null;
+			let action = null;
+			if (bundled) {
+				status = el("span", { class: "badge bundled", title: "Comes with TiddlyWiki; the bundled version is always used" }, "bundled " + bundled.version);
+			} else if (stored) {
+				const newer = window.compareVersionsLoose(entry.version, stored.version) > 0;
+				status = el("span", { class: "badge " + (newer ? "update" : "store") }, "store " + (stored.version || "?"));
+				action = newer ? actionButton("Update → " + entry.version, () => installFromShowcase(showcase, entry, true), { class: "primary" }) : null;
+			} else {
+				action = actionButton("Add to store", () => installFromShowcase(showcase, entry, false), { class: "primary" });
+			}
+			table.append(el("tr", {},
+				el("td", {}, kindLabel(entry.kind) + entry.name, entry.description ? el("div", { class: "desc" }, entry.description) : null,
+					entry.author ? el("div", { class: "desc small" }, "by " + entry.author) : null),
+				el("td", {}, el("span", { class: "badge" }, entry.version || "no version")),
+				el("td", {}, status),
+				el("td", { class: "actions-cell" }, action)));
+		}
+		if (!entries.length) {
+			table.append(el("tr", {}, el("td", { class: "muted" }, "The snapshot contains no plugins (besides the TiddlyWiki core).")));
+		}
+		card.append(table);
+		panel.append(card);
+	}
+}
+
+async function installFromShowcase(showcase, entry, update) {
+	const result = await papi.install(showcase.url, entry.title);
+	return (update ? "Updated " : "Added ") + result.title + " " + result.version + " from the showcase " + showcase.name + " to the store."
+		+ (update ? " Restart the wikis using it to load the new version." : " Add it to wikis in the Wikis tab.");
+}
+
+// Opens the Plugins window on a tab (e.g. from a showcase in the main window)
+function openPluginsTab(tab) {
+	activeTab = tab;
+	return run(async () => {
+		showMessage("");
+		search.indexes = null;
+		await reloadPlugins();
+		if (!$("#plugins-dialog").open) {
+			$("#plugins-dialog").showModal();
+		}
+	});
+}
+
 // Version comparison for the UI (main process has the same logic)
 window.compareVersionsLoose = (a, b) => {
 	const parse = v => String(v || "0").replace(/^[^\d]*/, "").split(/[-+]/)[0].split(".").map(n => parseInt(n, 10) || 0);
@@ -628,13 +730,15 @@ function renderPlugins() {
 	for (const tab of document.querySelectorAll("#plugins-dialog .tab")) {
 		tab.classList.toggle("active", tab.dataset.tab === activeTab);
 	}
-	for (const name of ["wikis", "store", "libraries"]) {
+	for (const name of ["wikis", "store", "libraries", "showcases"]) {
 		$("#tab-" + name).hidden = name !== activeTab;
 	}
 	if (activeTab === "wikis") {
 		renderWikisTab();
 	} else if (activeTab === "store") {
 		renderStoreTab();
+	} else if (activeTab === "showcases") {
+		renderShowcasesTab();
 	} else {
 		renderLibrariesTab();
 	}
@@ -647,9 +751,5 @@ for (const tab of document.querySelectorAll("#plugins-dialog .tab")) {
 	});
 }
 
-$("#show-plugins").addEventListener("click", () => run(async () => {
-	showMessage("");
-	await reloadPlugins();
-	$("#plugins-dialog").showModal();
-}));
+$("#show-plugins").addEventListener("click", () => openPluginsTab(activeTab));
 $("#close-plugins").addEventListener("click", () => $("#plugins-dialog").close());

@@ -160,6 +160,15 @@ function wikiItem(wiki, index, count) {
 	if (chip) {
 		name.append(" ", chip);
 	}
+	// Links to this wiki would be ambiguous
+	const sameKey = state.wikis.filter(w => w.linkKey.toLowerCase() === wiki.linkKey.toLowerCase());
+	if (sameKey.length > 1) {
+		name.append(button("link name \u201c" + wiki.linkKey + "\u201d used twice", () => openDialog(wiki), {
+			className: "git-chip warn link-chip",
+			title: "Also the link name of " + sameKey.filter(w => w.id !== wiki.id).map(w => "\u201c" + w.name + "\u201d").join(", ")
+				+ ". Links to \u201c" + wiki.linkKey + "\u201d ask which wiki is meant.\nClick to give this wiki its own link name."
+		}));
+	}
 	const meta = document.createElement("div");
 	meta.className = "wiki-meta";
 	meta.textContent = STATUS_TEXT[wiki.status] + " · " + portText(wiki) + (wiki.autostart ? " · autostart" : "") + " · " + wiki.path;
@@ -814,6 +823,18 @@ $("#show-settings").addEventListener("click", () => {
 	settingsForm.elements.gitStaleHours.value = git.staleHours;
 	settingsForm.elements.gitAutoCommit.checked = git.autoCommitOnStop;
 	settingsForm.elements.webCheck.checked = state.webCheck;
+	const linkConfig = state.links;
+	settingsForm.elements.linkStyle.value = linkConfig.style;
+	settingsForm.elements.linkPort.value = linkConfig.port;
+	settingsForm.elements.linkRouter.checked = linkConfig.router;
+	settingsForm.elements.linkScheme.checked = linkConfig.scheme;
+	settingsForm.elements.linkPlugin.checked = linkConfig.plugin;
+	$("#link-scheme-status").textContent = {
+		registered: "(registered for your user)",
+		"not registered": "(not registered)",
+		dev: "(only the installed TW Desk registers it)"
+	}[linkConfig.schemeStatus];
+	$("#link-router-status").textContent = linkConfig.routerError || (linkConfig.routerRunning ? "(running)" : "");
 	$("#settings-error").hidden = true;
 	$("#settings-dialog").showModal();
 });
@@ -828,7 +849,12 @@ settingsForm.addEventListener("submit", async event => {
 			gitFetch: fields.gitFetch.checked,
 			gitStaleHours: Number(fields.gitStaleHours.value),
 			gitAutoCommit: fields.gitAutoCommit.checked,
-			webCheck: fields.webCheck.checked
+			webCheck: fields.webCheck.checked,
+			linkStyle: fields.linkStyle.value,
+			linkPort: Number(fields.linkPort.value),
+			linkRouter: fields.linkRouter.checked,
+			linkScheme: fields.linkScheme.checked,
+			linkPlugin: fields.linkPlugin.checked
 		});
 		$("#settings-dialog").close();
 	} catch (e) {
@@ -889,6 +915,8 @@ async function openDialog(wiki) {
 	form.elements.description.value = wiki && wiki.description ? wiki.description : "";
 	form.elements.path.value = wiki ? wiki.path : "";
 	form.elements.fixedPort.value = wiki && wiki.fixedPort ? wiki.fixedPort : "";
+	form.elements.linkName.value = wiki && wiki.linkName ? wiki.linkName : "";
+	form.elements.linkName.placeholder = wiki ? folderName(wiki.path) : "the folder's name";
 	form.querySelector(".port-hint").textContent = portHint();
 	form.elements.autostart.checked = wiki ? !!wiki.autostart : false;
 	groupOptions(form.elements.group, wiki && wiki.group);
@@ -967,6 +995,7 @@ form.addEventListener("submit", async event => {
 			description: form.elements.description.value,
 			path: form.elements.path.value.trim(),
 			fixedPort: form.elements.fixedPort.value.trim() || null,
+			linkName: form.elements.linkName.value.trim(),
 			autostart: form.elements.autostart.checked,
 			group: form.elements.group.value || null
 		});

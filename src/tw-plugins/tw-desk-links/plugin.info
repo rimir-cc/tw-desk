@@ -1,0 +1,9 @@
+{
+	"title": "$:/plugins/tw-desk/links",
+	"name": "TW Desk links",
+	"description": "Links to tiddlers in other wikis, opened through TW Desk (built into TW Desk)",
+	"author": "TW Desk",
+	"version": "1.0.0",
+	"plugin-type": "plugin",
+	"list": "readme"
+}

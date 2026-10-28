@@ -157,6 +157,11 @@ test("planImport: register, clone, already there, missing, blocked; store, links
 	assert.deepEqual(plan.webWikis.map(l => l.action), ["already"]);
 	assert.deepEqual(plan.store.map(p => p.action), ["keep"]);
 
+	// A wiki elsewhere with the same folder name: links to "orga" would be ambiguous, the plan says so
+	plan = setup.planImport(data, target, Object.assign({}, env, { wikis: [{ name: "Other orga", path: path.join(dir, "elsewhere", "orga") }] }));
+	assert.match(plan.folders[0].linkNote, /link name “orga” is already used here by “Other orga”/);
+	assert.equal(plan.folders[2].linkNote, "");
+
 	// Without a base folder nothing can be placed
 	plan = setup.planImport(data, null, env);
 	assert.ok(plan.folders.every(f => f.action === "missing" && /choose the folder/.test(f.note)));

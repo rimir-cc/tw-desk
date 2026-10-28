@@ -6,6 +6,7 @@
 
 const fs = require("fs");
 const path = require("path");
+const links = require("./links");
 
 const FORMAT = "tw-desk-setup";
 const VERSION = 1;
@@ -60,7 +61,7 @@ function buildSetup(input) {
 		groups: input.groups.filter(g => input.wikis.some(w => w.group === g.id)).map(g => ({ name: g.name, collapsed: !!g.collapsed })),
 		wikis: input.wikis.map(w => {
 			const wiki = Object.assign({ name: w.name }, place(w.path));
-			for (const key of ["description", "fixedPort", "importedFrom"]) {
+			for (const key of ["description", "fixedPort", "linkName", "importedFrom"]) {
 				if (w[key]) {
 					wiki[key] = w[key];
 				}
@@ -215,6 +216,12 @@ function planImport(setup, base, env) {
 		}
 		if (wiki && inDesk) {
 			return Object.assign(item, { action: "already", note: "already in TW Desk as “" + inDesk.name + "”" });
+		}
+		// Links to it would be ambiguous here
+		if (wiki) {
+			const linkKey = String(wiki.linkName || "").trim() || path.basename(target);
+			const clash = env.wikis.find(w => links.sameKey(links.linkKeyOf(w), linkKey));
+			item.linkNote = clash ? " · its link name \u201c" + linkKey + "\u201d is already used here by \u201c" + clash.name + "\u201d" : "";
 		}
 		if (isWikiFolder(target)) {
 			return Object.assign(item, wiki ? { action: "register", note: "the folder exists" } : { action: "present", note: "the folder exists" });

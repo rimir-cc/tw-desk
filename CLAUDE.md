@@ -17,6 +17,8 @@ folders** – use copies (see Testing).
   per-folder `tiddlywiki.info` plugin lists, moving wiki-stored plugins into the store.
 - `src/git.js` – git via the system `git` (no prompts: `GIT_TERMINAL_PROMPT=0`, `GCM_INTERACTIVE=never`), status from
   `status --porcelain=v2 -z`; `src/git-ui.js` – git chips, Git tab of the bottom panel, footer line.
+- `src/links.js` – links between wikis (link names, both link forms, wikitext to copy); `src/tw-plugins/tw-desk-links/` –
+  the built-in TiddlyWiki plugin with the *TW Desk link* button.
 - `src/setup.js` – export/import of the setup (build the file, check it, plan an import); `src/setup-ui.js` – its dialog.
 - `src/web.js` – tiddlers and per-tiddler hashes of a single-file wiki's HTML (web wiki snapshots and change checks).
 - `src/preload.js` – `window.twDesk` API (contextBridge); `window.twDesk.plugins.*` for the plugins window.
@@ -95,6 +97,17 @@ folders** – use copies (see Testing).
 - **Closing wiki and snapshot windows:** TiddlyWiki's beforeunload warning (unsaved changes) makes Electron cancel the
   close without any dialog – the window looked stuck. `confirmUnload()` handles `will-prevent-unload` with its own
   question (*Close anyway* / *Stay*); while quitting it lets the window go without asking.
+- **Links between wikis** (`src/links.js`): `twdesk://<link name>/<title>` and `http://127.0.0.1:<links.port>/open/<link name>/<title>`
+  are parsed alike (`parseLink`) and handled in the wiki and snapshot windows' `setWindowOpenHandler`/`will-navigate`
+  (`handleDeskLink` → `followLink`: start, `openWiki` (returns the window), `showTiddler` = `$tw.Story.navigateTiddler`
+  once `.tc-story-river` exists). Link name = `wiki.linkName` or the folder name; hand-set names must be unique,
+  duplicates from folder names are only reported (chip, question on follow). `config.links` = { style, port, router,
+  scheme, plugin }. Router: `answerRouter` (302 to `<wiki url>#<title>`; `Sec-Fetch-Site: cross-site` gets a confirm
+  page). `twdesk://` is registered only when `app.isPackaged` (HKCU, no admin); links from other programs arrive via
+  `second-instance` argv / macOS `open-url` (`followArgv`). The built-in plugin `src/tw-plugins/tw-desk-links` is loaded
+  with TiddlyWiki's `++<folder>` argument (never written into wikis); its button only shows when the user agent contains
+  `TWDesk/` (set on wiki windows) and asks TW Desk to copy via `window.open("twdesk-copy:<title>")`, so TW Desk knows the
+  wiki from the window. TiddlyWiki treats `twdesk:` as internal, hence `[ext[…]]` for that form.
 - **Ports are automatic** (since 0.2.3): `config.basePort` + per wiki optional `fixedPort` and remembered
   `lastPort`. On start: fixed port, else `lastPort` if free, else the next free port from `basePort` – skipping other
   wikis' fixed and active ports and, if possible, their `lastPort`s (keeps URLs stable). Port choice is serialized
@@ -166,7 +179,7 @@ rules everywhere, so wikis stay usable on Windows. The manager window quits the 
 
 ## State (as of 2026-10-26)
 
-- Version 0.2.17 committed (asking before closing wiki/snapshot windows with unsaved changes, safe config writes, export/import of the setup, separate Demo/Website pills, showcase links to plugins, plugin showcases, search across all plugin libraries, groups, descriptions, web wiki links with snapshots and change checks, update check per library, create/copy/delete wizards, automatic ports, git,
+- Version 0.2.18 committed (links between wikis with twdesk:// and http forms and the built-in TW Desk links plugin, asking before closing wiki/snapshot windows with unsaved changes, safe config writes, export/import of the setup, separate Demo/Website pills, showcase links to plugins, plugin showcases, search across all plugin libraries, groups, descriptions, web wiki links with snapshots and change checks, update check per library, create/copy/delete wizards, automatic ports, git,
   Linux/macOS build targets, row menus and drag & drop). Builds are made by the user on Windows; this sandbox
   can't install Electron (no npm registry access). 0.2.0 was the first update from the short-path layout.
 - The user's plugins are still stored as tiddlers inside `_shared` (relink*, CPL-Repo, rimir/*,

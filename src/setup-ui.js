@@ -167,7 +167,7 @@ function renderImportPlan(plan) {
 			const selectable = item.action === "register" || item.action === "clone";
 			const name = el("span", {}, item.name + (item.wiki ? "" : " (included folder)") + " ",
 				el("span", { class: "badge " + (selectable ? "store" : item.action === "missing" || item.action === "blocked" ? "missing" : "") }, FOLDER_ACTIONS[item.action]));
-			return choice("folder", item.id, selectable, name, (item.path || item.relative) + " · " + item.note, !selectable);
+			return choice("folder", item.id, selectable, name, (item.path || item.relative) + " · " + item.note + (selectable && item.linkNote ? item.linkNote : ""), !selectable);
 		})));
 	}
 	if (plan.webWikis.length) {

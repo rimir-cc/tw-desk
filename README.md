@@ -17,16 +17,56 @@ TiddlyWiki (currently 5.4.1) is bundled; each wiki runs as its own server on `12
 - **Git:** each wiki row shows a small git chip (`⎇ main ✓`, `⎇ main · 14 changed · ↑2`, `⎇ no repository`, …); included folders get a dot on their chip. Grey = fine, amber = needs a commit/push/pull or a repository, red = merge conflict / merge in progress / detached HEAD. Click the chip for the **Git** tab (next to Log): changed files, Commit (suggested message), Push, Pull (only while the wikis using the repository are stopped; fast-forward only), Fetch, Add remote, Initialize repository (with a `.gitignore`). Checks run silently every 10 minutes (with fetch) and on window focus (local only); interval, fetching, when changes count as old, and auto-commit on stop (off by default) are in `Settings`. Uses the installed git (Git for Windows; on macOS Homebrew's git or the Xcode command line tools) and never asks for passwords – if a remote needs a login, push once from a terminal.
 - **Start / Stop / Open / Browser / Log** per wiki; "Start when TW Desk starts" = autostart.
 - **Groups:** `+ New` → *Group…* creates a group; the list shows one section per group (wikis without a group under "Ungrouped"). A wiki belongs to at most one group, chosen by dragging it or in **Edit**. Rename/Delete in the group's header; deleting a group keeps its wikis (ungrouped). Move up/down (⋯ menu) or dragging reorders wikis. Click a group's name to collapse or expand it (remembered in `config.json`).
-- **Includes** (`includeWikis` in `tiddlywiki.info`): shown under each wiki; the `Includes` button lists which wikis include which folder. Change them in **Edit** (wiki must be stopped; only folders with a `tiddlywiki.info`).
+- **Includes** (`includeWikis` in `tiddlywiki.info`): shown under each wiki; the `Includes` button lists which wikis include which folder. Change them in **Edit** (only folders with a `tiddlywiki.info`; changing them needs the wiki stopped – the other settings in Edit can be changed while it runs).
 - **Plugins** button:
   - *Wikis*: the plugins/themes/languages in each folder's `tiddlywiki.info` (also included folders such as `_shared`, whose plugins every including wiki gets). Add bundled or store plugins, remove them, and move plugins stored inside a wiki (as tiddlers) into the store; the original files go to `%APPDATA%\TW Desk\backup`.
   - *Store*: shared plugins in `%APPDATA%\TW Desk\store` (kept on reinstall/update); check for updates: lists every store and wiki-stored plugin with the version each library offers (a plugin can be in several libraries; pick which one to update from), and which plugins can't be checked (not in any library / no version).
   - *Libraries*: one search across all registered libraries (standard TiddlyWiki libraries and CPL) and plugin showcases. Words must all match (name, description, author, tags or any other field of the library's list); `"a phrase"`; `-word` excludes; `field:value` searches one field (`author:`, `tag:`, `title:`, `description:`, `version:` or any index field such as `core-version:`). Matches are ranked (name > title > description > rest) and highlighted; a plugin found in several libraries is one row with each library's version and an Install/Update button per library. Filter by library and kind, hide installed ones; click a row for all fields (links open in the browser). The library list (add/remove) is below the results.
   - *Showcases*: web wikis marked as *Plugin showcase* (checkbox in the web wiki's Edit dialog, or *+ Add showcase* here, which also saves the snapshot right away) with the plugins, themes and languages in their snapshot: *Open demo*, *Add to store* / *Update → x.y* straight from the snapshot (for plugins that aren't in any library), Save/Update snapshot. The plugin list of each showcase is folded until you open it. *Link* marks a showcase as the demo of a plugin in it (several are possible; *Unlink* or ✕ in the "Demo of" line removes it): linked plugins get a *Demo* pill (opens the snapshot in a window; only once there is a snapshot) and a *Website ↗* pill (default browser) in the Wikis, Store and Libraries tabs, with a note like "demo shows 1.0.0" when the showcase has another version than the one installed (or used by that wiki). Showcases also count as sources in the library search and the update check. In the main window a showcase shows a chip "showcase · N plugins" – or "showcase of relink" once linked – that opens this tab.
+  - The built-in plugin *TW Desk links* (`$:/plugins/tw-desk/links`, see [Links between wikis](#links-between-wikis)) isn't listed here: it comes with TW Desk, is loaded into every wiki it serves and can be switched off in Settings.
   - TW Desk passes the store to TiddlyWiki via `TIDDLYWIKI_PLUGIN_PATH` (and the theme/language equivalents); bundled plugins take precedence. Changes apply when a wiki is (re)started.
 - Wiki list, groups and libraries: `%APPDATA%\TW Desk\config.json`.
 - Data folder (config, store, backup) per system: Windows `%APPDATA%\TW Desk`, macOS `~/Library/Application Support/TW Desk`, Linux `~/.config/TW Desk` (paths above use the Windows one).
 - Only one server per wiki folder: don't open the same folder in TiddlyDesktop or Docker at the same time.
+
+## Links between wikis
+
+A tiddler in one wiki can link to a tiddler in another wiki. Clicking such a link in a TW Desk window starts the target
+wiki if needed, opens its window or brings it to the front (also when minimized) and shows the tiddler at the top of
+its story – like a normal link, nothing in the window is reloaded.
+
+**Creating links:** every wiki TW Desk serves gets the built-in plugin *TW Desk links* (`$:/plugins/tw-desk/links`; it
+comes with TW Desk and is loaded when the wiki starts – nothing is written into the wiki folder or its git repository).
+In a TW Desk window each tiddler has a toolbar button **TW Desk link** (link icon; also under "more"): it copies a link
+to that tiddler, ready to paste into another wiki, and the wiki shows "TW Desk link copied". The button doesn't appear
+when the wiki is opened in a browser.
+
+**Link names:** a link names its wiki by the wiki's *link name* – set in **Edit** (*Link name*), otherwise the name of
+the wiki's folder (`orga`, `priv-orga`, `_shared`). Folder names travel with git and with export/import, so links keep
+working on other computers. A name set by hand must be unique. If two wikis end up with the same name (e.g. two folders
+called `alpha`), both rows show a chip *link name “alpha” used twice* (click it to give one its own name) and a link to
+that name asks which wiki is meant. Changing a link name breaks the links that use the old one.
+
+**Two link forms**, interchangeable – a TW Desk window follows both, whatever is set for copying
+(Settings → *Links between wikis*):
+
+| | `twdesk://` (default) | `http://` |
+|---|---|---|
+| Copied as | `[ext[Plan (orga)\|twdesk://orga/Plan]]` | `[[Plan (orga)\|http://127.0.0.1:8089/open/orga/Plan]]` |
+| In TW Desk windows | yes | yes (also when the router is off) |
+| In a browser or another program (mail, Teams, a file) | after registration: the system asks once whether to open TW Desk; the wiki opens in a TW Desk window | with *Answer http links in browsers* on: TW Desk starts the wiki and sends the browser there (`…:<wiki port>/#Plan`, a new tab) |
+| Needs | the installed TW Desk (registered per user, no admin rights; *Open twdesk:// links from other programs*) | a free port (*Port for http links*, default start port − 1, e.g. 8089) and TW Desk running |
+
+`twdesk://` needs the `[ext[…]]` form because TiddlyWiki only treats `http`, `https`, `mailto` and a few other schemes as
+external links – a plain `[[…|twdesk://…]]` would link to a missing tiddler. Both forms are written by hand the same way:
+`twdesk://<link name>/<tiddler title, URL-encoded>` or `http://127.0.0.1:<port>/open/<link name>/<title>`; without a
+title (`twdesk://orga`) the wiki just opens. The http router only listens on 127.0.0.1; a request sent by another
+website gets a page with an *Open it with TW Desk* link instead of starting anything by itself.
+
+**Settings → Links between wikis:** which form *TW Desk link* copies, the port for http links, whether to answer http
+links in browsers, whether to register `twdesk://` for other programs (status shown next to it; only the installed app
+registers, not a development or test run), and whether to load the built-in plugin (applies when a wiki is restarted).
+Link names and these settings are part of Export/Import setup.
 
 ## Develop and build
 

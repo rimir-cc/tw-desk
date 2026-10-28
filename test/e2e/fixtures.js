@@ -22,8 +22,12 @@ function escapeRegExp(text) {
 }
 
 // Runs inside TW Desk's main process (serialized by Playwright, so no closures)
-function stubMainProcess({ dialog, shell }) {
-	const calls = globalThis.twDeskTest = { picks: [], saves: [], answers: [], questions: [], opened: [], shown: [], trashed: [] };
+function stubMainProcess({ dialog, shell, clipboard }) {
+	const calls = globalThis.twDeskTest = { picks: [], saves: [], answers: [], questions: [], opened: [], shown: [], trashed: [], copied: [] };
+	// Not the user's clipboard
+	clipboard.writeText = text => {
+		calls.copied.push(text);
+	};
 	// Message boxes are answered from answers (button index); without one: the cancel button
 	dialog.showMessageBoxSync = (win, options) => {
 		const box = options || win;

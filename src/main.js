@@ -9,6 +9,8 @@ const plugins = require("./plugins");
 const git = require("./git");
 const web = require("./web");
 const setup = require("./setup");
+const links = require("./links");
+const http = require("http");
 
 const DEFAULT_BASE_PORT = 8090;
 // Windows and (by default) macOS don't distinguish upper and lower case in paths
@@ -19,6 +21,8 @@ const MAX_LOG_LINES = 500;
 // so no separate Node install is needed.
 const TW_PROCESS = path.join(__dirname, "tw-process.js");
 const TW_VERSION = require("tiddlywiki/package.json").version;
+// Loaded by every wiki TW Desk serves (TiddlyWiki's "++<folder>" argument), never written into the wiki folders
+const LINK_PLUGIN = path.join(__dirname, "tw-plugins", "tw-desk-links");
 
 let managerWindow = null;
 let config = { basePort: DEFAULT_BASE_PORT, groups: [], wikis: [], webWikis: [], libraries: [] };
@@ -132,6 +136,15 @@ function validateSettings(wiki, ignoreId) {
 			throw new Error("Port " + wiki.fixedPort + " is already the fixed port of \"" + clash.name + "\".");
 		}
 	}
+	const nameProblem = links.checkLinkName(wiki.linkName);
+	if (nameProblem) {
+		throw new Error(nameProblem);
+	}
+	// A name set by hand must be unique; same folder names are only reported (chip in the list)
+	const sameName = wiki.linkName && config.wikis.find(w => w.id !== ignoreId && links.sameKey(links.linkKeyOf(w), wiki.linkName));
+	if (sameName) {
+		throw new Error("The link name \u201c" + wiki.linkName + "\u201d is already used by \u201c" + sameName.name + "\u201d.");
+	}
 	const samePath = config.wikis.find(w => w.id !== ignoreId && folderKey(w.path) === folderKey(wiki.path));
 	if (samePath) {
 		throw new Error("This folder is already in TW Desk as \"" + samePath.name + "\".");
@@ -151,6 +164,10 @@ function wikiFromInput(input) {
 	const description = String(input.description || "").trim().slice(0, 2000);
 	if (description) {
 		wiki.description = description;
+	}
+	const linkName = String(input.linkName || "").trim();
+	if (linkName) {
+		wiki.linkName = linkName;
 	}
 	const existing = config.wikis.find(w => w.id === input.id);
 	if (existing && existing.lastPort) {
@@ -195,8 +212,9 @@ function snapshot() {
 		ungroupedCollapsed: !!config.ungroupedCollapsed,
 		webWikis: config.webWikis.map(l => Object.assign({}, l, { busy: webBusy.get(l.id) || null }, l.showcase ? { pluginCount: snapshotPluginTiddlers(l).length } : {})),
 		webCheck: webCheckEnabled(),
+		links: linkState(),
 		webCollapsed: !!config.webCollapsed,
-		wikis: config.wikis.map(w => Object.assign({}, w, { group: groupOf(w) }, serverState(w.id), { port: activePort(w.id), url: wikiUrl(w.id) }, readIncludes(w.path)))
+		wikis: config.wikis.map(w => Object.assign({}, w, { group: groupOf(w), linkKey: links.linkKeyOf(w) }, serverState(w.id), { port: activePort(w.id), url: wikiUrl(w.id) }, readIncludes(w.path)))
 	};
 }
 
@@ -230,6 +248,12 @@ function readIncludes(wikiPath) {
 
 function saveIncludes(id, entries) {
 	const wiki = findWiki(id);
+	// The Edit dialog always sends the includes: unchanged ones (same folders, same read-only) are fine while it runs
+	const meaning = list => JSON.stringify(list.map(i => [folderKey(path.resolve(wiki.path, i.path)), !!i.readOnly]));
+	const current = readIncludes(wiki.path);
+	if (!current.infoError && meaning(entries) === meaning(current.includes.map(i => ({ path: i.resolved, readOnly: i.readOnly })))) {
+		return;
+	}
 	const s = serverState(id).status;
 	if (s === "running" || s === "starting") {
 		throw new Error("Stop the wiki before changing its includes.");
@@ -368,7 +392,8 @@ async function startWiki(id) {
 		saveConfig();
 	}
 	appendLog(id, "Starting TiddlyWiki " + TW_VERSION + ": " + wiki.path + " on port " + port);
-	const child = runTiddlyWiki([wiki.path, "--listen", "host=127.0.0.1", "port=" + port], "TiddlyWiki " + wiki.name);
+	const extra = linkSettings().plugin ? ["++" + LINK_PLUGIN] : [];
+	const child = runTiddlyWiki(extra.concat([wiki.path, "--listen", "host=127.0.0.1", "port=" + port]), "TiddlyWiki " + wiki.name);
 	state.child = child;
 	const onOutput = data => {
 		const text = data.toString();
@@ -462,21 +487,25 @@ function confirmUnload(win, message, detail) {
 	});
 }
 
-async function openWiki(id, external) {
-	const wiki = findWiki(id);
+async function ensureRunning(id) {
 	if (serverState(id).status !== "running") {
 		await startWiki(id);
 		await waitForRunning(id, 60000);
 	}
+}
+
+async function openWiki(id, external) {
+	const wiki = findWiki(id);
+	await ensureRunning(id);
 	const url = wikiUrl(id);
 	if (external) {
 		await shell.openExternal(url);
-		return;
+		return null;
 	}
 	const existing = wikiWindows.get(id);
 	if (existing && !existing.isDestroyed()) {
 		bringToFront(existing);
-		return;
+		return existing;
 	}
 	const win = new BrowserWindow({
 		width: 1280,
@@ -485,8 +514,13 @@ async function openWiki(id, external) {
 		autoHideMenuBar: true,
 		webPreferences: { contextIsolation: true, nodeIntegration: false, sandbox: true }
 	});
-	// Links to other sites open in the default browser; links within the wiki stay in the window.
+	// The built-in plugin shows its copy button only where the user agent says TW Desk
+	win.webContents.setUserAgent(win.webContents.getUserAgent() + " TWDesk/" + app.getVersion());
+	// TW Desk links are handled here; links to other sites open in the default browser; links within the wiki stay
 	win.webContents.setWindowOpenHandler(({ url: target }) => {
+		if (handleDeskLink(target, id)) {
+			return { action: "deny" };
+		}
 		if (!target.startsWith(url)) {
 			shell.openExternal(target);
 			return { action: "deny" };
@@ -494,7 +528,9 @@ async function openWiki(id, external) {
 		return { action: "allow" };
 	});
 	win.webContents.on("will-navigate", (event, target) => {
-		if (!target.startsWith(url)) {
+		if (handleDeskLink(target, id)) {
+			event.preventDefault();
+		} else if (!target.startsWith(url)) {
 			event.preventDefault();
 			shell.openExternal(target);
 		}
@@ -507,6 +543,7 @@ async function openWiki(id, external) {
 	win.on("closed", () => wikiWindows.delete(id));
 	wikiWindows.set(id, win);
 	win.loadURL(url);
+	return win;
 }
 
 // ---------- git ----------
@@ -987,12 +1024,23 @@ ipcMain.handle("save-settings", (event, input) => {
 	if (!(staleHours > 0)) {
 		throw new Error("The hours for old uncommitted changes must be a positive number.");
 	}
+	const linkPort = Number(input.linkPort);
+	if (!validPort(linkPort)) {
+		throw new Error("The port for http links must be a number between 1024 and 65535.");
+	}
+	const fixed = config.wikis.find(w => w.fixedPort === linkPort);
+	if (fixed) {
+		throw new Error("Port " + linkPort + " is the fixed port of \"" + fixed.name + "\"; choose another one for http links.");
+	}
 	config.basePort = basePort;
 	config.git = { interval, fetch: !!input.gitFetch, staleHours, autoCommitOnStop: !!input.gitAutoCommit };
 	config.webCheck = !!input.webCheck;
+	config.links = { style: input.linkStyle === "http" ? "http" : "scheme", port: linkPort, router: !!input.linkRouter, scheme: !!input.linkScheme, plugin: !!input.linkPlugin };
 	saveConfig();
 	scheduleGitChecks();
 	scheduleWebChecks();
+	startRouter();
+	registerScheme();
 	pushState();
 });
 
@@ -1563,13 +1611,17 @@ function openSnapshot(id) {
 		}
 	};
 	win.webContents.setWindowOpenHandler(({ url: target }) => {
-		external(target);
+		if (!handleDeskLink(target, null)) {
+			external(target);
+		}
 		return { action: "deny" };
 	});
 	// Links within the wiki only change the #hash; anything else goes to the browser
 	win.webContents.on("will-navigate", (event, target) => {
 		event.preventDefault();
-		external(target);
+		if (!handleDeskLink(target, null)) {
+			external(target);
+		}
 	});
 	win.on("page-title-updated", (event, pageTitle) => {
 		event.preventDefault();
@@ -1697,9 +1749,217 @@ ipcMain.handle("remove-group", (event, id) => {
 
 ipcMain.handle("start-wiki", (event, id) => startWiki(id));
 ipcMain.handle("stop-wiki", (event, id) => stopWiki(id));
-ipcMain.handle("open-wiki", (event, id, external) => openWiki(id, external));
+ipcMain.handle("open-wiki", async (event, id, external) => {
+	await openWiki(id, external);
+});
 ipcMain.handle("show-folder", (event, id) => shell.openPath(findWiki(id).path));
 ipcMain.handle("copy-text", (event, text) => clipboard.writeText(String(text)));
+
+// ---------- links between wikis (src/links.js, built-in plugin in src/tw-plugins/tw-desk-links) ----------
+
+const LINK_DEFAULTS = { style: "scheme", router: false, scheme: true, plugin: true };
+let router = null; // { server, port } while TW Desk answers http links in browsers
+let routerError = null;
+
+// style: what "TW Desk link" copies (scheme | http); port: the router's; router: answer http links in browsers;
+// scheme: register twdesk:// for other programs; plugin: load the built-in plugin into the wikis
+function linkSettings() {
+	return Object.assign({}, LINK_DEFAULTS, { port: config.basePort - 1 }, config.links);
+}
+
+function wikisWithKey(key) {
+	return config.wikis.filter(w => links.sameKey(links.linkKeyOf(w), key));
+}
+
+function linkMessage(message, detail) {
+	dialog.showMessageBoxSync(BrowserWindow.getFocusedWindow() || managerWindow, { type: "info", title: "TW Desk", message, detail, buttons: ["OK"] });
+}
+
+// For URLs clicked in a wiki or snapshot window: true if it was a TW Desk link (then it's taken care of here)
+function handleDeskLink(url, fromWikiId) {
+	const link = links.parseLink(url, linkSettings().port);
+	if (!link) {
+		return false;
+	}
+	if (link.copy !== undefined) {
+		if (fromWikiId) {
+			copyDeskLink(fromWikiId, link.copy);
+		}
+	} else {
+		followLink(link.key, link.title).catch(e => linkMessage("Could not open the link.", e.message));
+	}
+	return true;
+}
+
+function copyDeskLink(id, title) {
+	const wiki = findWiki(id);
+	const settings = linkSettings();
+	const key = links.linkKeyOf(wiki);
+	clipboard.writeText(links.linkWikitext(settings.style, key, title, settings.port));
+	const twice = wikisWithKey(key).length > 1 ? " Note: another wiki has the same link name “" + key + "” – give one of them its own in Edit…" : "";
+	const win = wikiWindows.get(id);
+	if (win && !win.isDestroyed()) {
+		const notice = "TW Desk link copied – paste it into another wiki." + twice;
+		win.webContents.executeJavaScript("$tw.wiki.addTiddler({ title: \"$:/temp/tw-desk/notice\", text: " + JSON.stringify(notice) + " }); $tw.notifier.display(\"$:/temp/tw-desk/notice\"); true").catch(() => {});
+	}
+}
+
+// Starts the wiki if needed, opens its window or brings it to the front, then shows the tiddler
+async function followLink(key, title) {
+	const matches = wikisWithKey(key);
+	if (!matches.length) {
+		linkMessage("No wiki with the link name “" + key + "” in TW Desk.", "A wiki's link name is the one set in its Edit dialog, otherwise the name of its folder.");
+		return;
+	}
+	let wiki = matches[0];
+	if (matches.length > 1) {
+		const choice = dialog.showMessageBoxSync(BrowserWindow.getFocusedWindow() || managerWindow, {
+			type: "question",
+			title: "TW Desk",
+			message: "Several wikis have the link name “" + key + "”.",
+			detail: "Open which one? Give one of them its own link name in Edit… to make such links unique.",
+			buttons: matches.map(w => w.name).concat("Cancel"),
+			defaultId: 0,
+			cancelId: matches.length
+		});
+		if (!(choice >= 0 && choice < matches.length)) {
+			return;
+		}
+		wiki = matches[choice];
+	}
+	const win = await openWiki(wiki.id);
+	if (title && win) {
+		await showTiddler(win, title);
+	}
+}
+
+// Waits until TiddlyWiki has rendered in the window, then opens the tiddler as a link click would (top of the story)
+async function showTiddler(win, title) {
+	const started = Date.now();
+	while (!win.isDestroyed()) {
+		const ready = await win.webContents.executeJavaScript("!!(window.$tw && $tw.Story && $tw.wiki && document.querySelector(\".tc-story-river\"))").catch(() => false);
+		if (ready) {
+			await win.webContents.executeJavaScript("new $tw.Story({ wiki: $tw.wiki }).navigateTiddler(" + JSON.stringify(title) + "); true");
+			return;
+		}
+		if (Date.now() - started > 60000) {
+			throw new Error("The wiki didn't finish loading.");
+		}
+		await new Promise(resolve => setTimeout(resolve, 200));
+	}
+}
+
+function escapeHtml(text) {
+	return String(text).replace(/[&<>"]/g, c => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", "\"": "&quot;" })[c]);
+}
+
+function routerPage(res, status, heading, body) {
+	res.writeHead(status, { "Content-Type": "text/html; charset=utf-8" });
+	res.end("<!doctype html><meta charset=\"utf-8\"><title>TW Desk</title><body style=\"font-family: system-ui, sans-serif; margin: 2em\"><h2>"
+		+ escapeHtml(heading) + "</h2>" + body + "</body>");
+}
+
+// The router: /open/<link name>/<title> starts the wiki and sends the browser there
+async function answerRouter(req, res) {
+	const url = new URL(req.url, "http://127.0.0.1");
+	const link = req.method === "GET" ? links.parseRouterPath(url.pathname) : null;
+	if (!link) {
+		routerPage(res, 404, "Not a TW Desk link", "<p>TW Desk links look like <code>/open/&lt;link name&gt;/&lt;tiddler&gt;</code>.</p>");
+		return;
+	}
+	const what = (link.title ? "“" + link.title + "” in " : "") + "“" + link.key + "”";
+	// A page on another website can't start wikis on its own: it gets a button (clicking it is a same-origin request)
+	if (req.headers["sec-fetch-site"] === "cross-site") {
+		routerPage(res, 200, "Open " + what + "?", "<p><a href=\"" + escapeHtml(url.pathname + url.search) + "\">Open it with TW Desk</a></p>");
+		return;
+	}
+	let matches = wikisWithKey(link.key);
+	const chosen = url.searchParams.get("wiki");
+	if (chosen) {
+		matches = matches.filter(w => w.id === chosen);
+	}
+	if (!matches.length) {
+		routerPage(res, 404, "No wiki with the link name “" + link.key + "” in TW Desk", "<p>A wiki's link name is the one set in its Edit dialog, otherwise the name of its folder.</p>");
+		return;
+	}
+	if (matches.length > 1) {
+		routerPage(res, 409, "Several wikis have the link name “" + link.key + "”", "<p>Open which one?</p><ul>"
+			+ matches.map(w => "<li><a href=\"" + escapeHtml(url.pathname + "?wiki=" + encodeURIComponent(w.id)) + "\">" + escapeHtml(w.name) + "</a></li>").join("") + "</ul>");
+		return;
+	}
+	const wiki = matches[0];
+	try {
+		await ensureRunning(wiki.id);
+	} catch (e) {
+		routerPage(res, 500, "Could not start “" + wiki.name + "”", "<p>" + escapeHtml(e.message) + "</p>");
+		return;
+	}
+	res.writeHead(302, { Location: wikiUrl(wiki.id) + (link.title ? "#" + encodeURIComponent(link.title) : "") });
+	res.end();
+}
+
+// (Re)starts the router as the settings say
+function startRouter() {
+	const settings = linkSettings();
+	const port = settings.router ? settings.port : null;
+	if (router && router.port === port) {
+		return;
+	}
+	if (router) {
+		router.server.close();
+		router = null;
+	}
+	routerError = null;
+	if (!port) {
+		return;
+	}
+	const server = http.createServer((req, res) => {
+		answerRouter(req, res).catch(e => routerPage(res, 500, "Error", "<p>" + escapeHtml(e.message) + "</p>"));
+	});
+	server.on("error", e => {
+		routerError = e.code === "EADDRINUSE" ? "Port " + port + " is in use by another program." : e.message;
+		router = null;
+		pushState();
+	});
+	server.listen(port, "127.0.0.1");
+	router = { server, port };
+}
+
+// Only the installed app registers twdesk:// (for the current user, no admin rights): a registration from a
+// development or test run would point at that copy
+function registerScheme() {
+	if (!app.isPackaged) {
+		return;
+	}
+	try {
+		if (linkSettings().scheme) {
+			app.setAsDefaultProtocolClient(links.SCHEME);
+		} else if (app.isDefaultProtocolClient(links.SCHEME)) {
+			app.removeAsDefaultProtocolClient(links.SCHEME);
+		}
+	} catch (e) {
+		console.error("Could not register " + links.SCHEME + "://:", e);
+	}
+}
+
+function linkState() {
+	return Object.assign(linkSettings(), {
+		schemeStatus: !app.isPackaged ? "dev" : app.isDefaultProtocolClient(links.SCHEME) ? "registered" : "not registered",
+		routerRunning: !!router,
+		routerError
+	});
+}
+
+// twdesk:// links from other programs arrive as a command-line argument (Windows, Linux) or via open-url (macOS)
+function followArgv(argv) {
+	const url = (argv || []).find(arg => /^twdesk:\/\//i.test(arg));
+	const link = url ? links.parseLink(url, linkSettings().port) : null;
+	if (link && link.key) {
+		followLink(link.key, link.title).catch(e => linkMessage("Could not open the link.", e.message));
+		return true;
+	}
+	return false;
+}
 
 // ---------- export / import of the setup (src/setup.js) ----------
 
@@ -1812,7 +2072,7 @@ ipcMain.handle("setup-export", async (event, choices) => {
 		}),
 		store: choices.store ? storeForExport(skipped) : null,
 		libraries: choices.libraries ? config.libraries : null,
-		settings: choices.settings ? { basePort: config.basePort, git: gitSettings(), webCheck: webCheckEnabled() } : null
+		settings: choices.settings ? { basePort: config.basePort, git: gitSettings(), webCheck: webCheckEnabled(), links: linkSettings() } : null
 	});
 	const result = await dialog.showSaveDialog(managerWindow, {
 		title: "Export setup",
@@ -1881,6 +2141,18 @@ function importSettings(settings) {
 	if (settings.webCheck !== undefined) {
 		config.webCheck = !!settings.webCheck;
 	}
+	const linkInput = settings.links;
+	if (linkInput && typeof linkInput === "object") {
+		const current = linkSettings();
+		const port = Number(linkInput.port);
+		config.links = {
+			style: linkInput.style === "http" ? "http" : "scheme",
+			port: validPort(port) && !config.wikis.some(w => w.fixedPort === port) ? port : current.port,
+			router: !!linkInput.router,
+			scheme: linkInput.scheme === undefined ? current.scheme : !!linkInput.scheme,
+			plugin: linkInput.plugin === undefined ? current.plugin : !!linkInput.plugin
+		};
+	}
 }
 
 // choices: { folders: [plan ids], webWikis: [plan ids], store, libraries, settings }. Returns [{ ok, text }]
@@ -1939,7 +2211,7 @@ async function runImport(base, choices) {
 		}
 		const entry = data.wikis.find(w => folderKey(setup.resolvePlace(w, plan.base) || "") === folderKey(item.path));
 		const wiki = { id: crypto.randomUUID(), name: entry.name, path: item.path, autostart: !!entry.autostart };
-		for (const key of ["description", "importedFrom", "copiedFrom"]) {
+		for (const key of ["description", "linkName", "importedFrom", "copiedFrom"]) {
 			if (entry[key]) {
 				wiki[key] = entry[key];
 			}
@@ -2041,6 +2313,8 @@ async function runImport(base, choices) {
 		done("Applied the settings (start port " + config.basePort + ").");
 		scheduleGitChecks();
 		scheduleWebChecks();
+		startRouter();
+		registerScheme();
 	}
 
 	saveConfig();
@@ -2086,8 +2360,9 @@ if (process.env.TW_DESK_USER_DATA) {
 if (!app.requestSingleInstanceLock()) {
 	app.quit();
 } else {
-	app.on("second-instance", () => {
-		if (managerWindow) {
+	app.on("second-instance", (event, argv) => {
+		// A link opens its wiki's window; otherwise starting TW Desk again shows the manager
+		if (!followArgv(argv) && managerWindow) {
 			if (managerWindow.isMinimized()) {
 				managerWindow.restore();
 			}
@@ -2107,6 +2382,14 @@ if (!app.requestSingleInstanceLock()) {
 		scheduleGitChecks();
 		checkGit({ fetch: gitSettings().fetch });
 		scheduleWebChecks();
+		startRouter();
+		registerScheme();
+		followArgv(process.argv);
+	});
+
+	app.on("open-url", (event, url) => {
+		event.preventDefault();
+		app.whenReady().then(() => followArgv([url]));
 	});
 
 	app.on("before-quit", () => {

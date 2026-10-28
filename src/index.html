@@ -62,6 +62,10 @@
 			<input name="fixedPort" type="number" min="1024" max="65535" placeholder="automatic">
 			<small class="muted port-hint"></small>
 		</label>
+		<label>Link name <small class="muted">(optional)</small>
+			<input name="linkName" maxlength="100">
+			<small class="muted">Names this wiki in links from other wikis (“TW Desk link” button), e.g. twdesk://orga/Some%20tiddler. Empty: the folder's name.</small>
+		</label>
 		<label id="group-field">Group
 			<select name="group"></select>
 		</label>
@@ -185,6 +189,18 @@
 		<label class="inline"><input name="gitAutoCommit" type="checkbox"> Commit automatically when a wiki is stopped</label>
 		<div class="field-title">Web wikis</div>
 		<label class="inline"><input name="webCheck" type="checkbox"> Check web wikis for changes once a day</label>
+		<div class="field-title">Links between wikis</div>
+		<fieldset class="stacked">
+			<label><input type="radio" name="linkStyle" value="scheme"> “TW Desk link” copies <code>twdesk://orga/Title</code> links</label>
+			<label><input type="radio" name="linkStyle" value="http"> … copies <code>http://127.0.0.1:<em>port</em>/open/orga/Title</code> links (also clickable in browsers and other programs)</label>
+		</fieldset>
+		<small class="muted">TW Desk windows follow both kinds, whichever is chosen here.</small>
+		<label>Port for http links
+			<input name="linkPort" type="number" min="1024" max="65535" required>
+		</label>
+		<label class="inline"><input name="linkRouter" type="checkbox"> Answer http links in browsers: start the wiki and go there <small class="muted" id="link-router-status"></small></label>
+		<label class="inline"><input name="linkScheme" type="checkbox"> Open twdesk:// links from other programs <small class="muted" id="link-scheme-status"></small></label>
+		<label class="inline"><input name="linkPlugin" type="checkbox"> Load the built-in “TW Desk links” plugin into the wikis (the copy button; applies when a wiki is restarted)</label>
 		<div class="field-title">Move or share this setup</div>
 		<div class="row">
 			<button type="button" id="export-setup" title="Write wikis (with their git remotes), groups, web wikis, store plugins, libraries and settings into one file">Export setup…</button>

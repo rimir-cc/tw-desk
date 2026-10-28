@@ -257,3 +257,9 @@ textarea, input:not([type=checkbox]):not([type=radio]) {
 .setup-report { list-style: none; padding: 0; white-space: pre-wrap; word-break: break-word; }
 .setup-report li { margin-bottom: 6px; }
 .setup-report li.failed { color: var(--error); }
+
+/* Links between wikis */
+#settings-dialog { max-height: 90vh; overflow: auto; }
+#settings-form fieldset.stacked { margin-bottom: 4px; }
+#settings-form fieldset.stacked + small { display: block; margin-bottom: 12px; }
+.git-chip.link-chip { border: 1px solid var(--starting); }

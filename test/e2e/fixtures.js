@@ -23,7 +23,13 @@ function escapeRegExp(text) {
 
 // Runs inside TW Desk's main process (serialized by Playwright, so no closures)
 function stubMainProcess({ dialog, shell }) {
-	const calls = globalThis.twDeskTest = { picks: [], saves: [], opened: [], shown: [], trashed: [] };
+	const calls = globalThis.twDeskTest = { picks: [], saves: [], answers: [], questions: [], opened: [], shown: [], trashed: [] };
+	// Message boxes are answered from answers (button index); without one: the cancel button
+	dialog.showMessageBoxSync = (win, options) => {
+		const box = options || win;
+		calls.questions.push(box.message);
+		return calls.answers.length ? calls.answers.shift() : box.cancelId;
+	};
 	dialog.showOpenDialog = async () => {
 		const next = calls.picks.shift();
 		return next ? { canceled: false, filePaths: [next] } : { canceled: true, filePaths: [] };
@@ -121,7 +127,17 @@ class Desk {
 	}
 
 	config() {
-		return JSON.parse(fs.readFileSync(path.join(this.userData, "config.json"), "utf8"));
+		// TW Desk may be replacing the file right now (on Windows the rename can fall back to rewriting it)
+		for (let attempt = 1; ; attempt++) {
+			try {
+				return JSON.parse(fs.readFileSync(path.join(this.userData, "config.json"), "utf8"));
+			} catch (e) {
+				if (attempt === 5) {
+					throw e;
+				}
+				Atomics.wait(new Int32Array(new SharedArrayBuffer(4)), 0, 0, 50);
+			}
+		}
 	}
 
 	async wikiState(name) {
@@ -136,6 +152,11 @@ class Desk {
 	// confirm()/alert() calls so far, and forgets them (so an expected error message doesn't fail the test)
 	takeDialogs() {
 		return this.page.evaluate(() => window.testDialogs.splice(0));
+	}
+
+	// Next answer of a message box (index of the button)
+	answer(index) {
+		return this.app.evaluate((electron, button) => globalThis.twDeskTest.answers.push(button), index);
 	}
 
 	// Next answer of the save dialog

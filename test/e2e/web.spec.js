@@ -263,3 +263,37 @@ test("web wiki: address checks, unreachable site, new address with a new baselin
 	expect(fs.existsSync(path.join(desk.userData, "web", link.id, "snapshot.html"))).toBe(false);
 	await expect(plainRow.getByRole("button", { name: "Open ↗", exact: true })).toBeVisible();
 });
+
+test("closing a snapshot with changes asks instead of silently refusing", async ({ desk, server }) => {
+	const url = server.setPage("/changed/index.html", tw.wikiHtml([{ title: "Note", text: "on the site" }]));
+	const page = await desk.launch();
+	await page.evaluate(async address => {
+		const id = await window.twDesk.webWikis.save({ url: address, name: "Site" });
+		await window.twDesk.webWikis.saveSnapshot(id);
+	}, url);
+	await desk.webIdle();
+	const row = desk.webRow("Site");
+	const win = await desk.windowOpenedBy(() => row.getByRole("button", { name: "Open", exact: true }).click());
+	await expect.poll(() => win.evaluate(() => window.$tw && $tw.wiki && $tw.wiki.getTiddlerText("Note")), { timeout: 30000 }).toBe("on the site");
+
+	// A change, made as a user gesture (Chromium only lets a page hold up closing after the user did something there)
+	await desk.app.evaluate(({ BrowserWindow }) => BrowserWindow.getAllWindows().find(w => w.webContents.getURL().endsWith("snapshot.html"))
+		.webContents.executeJavaScript("$tw.wiki.addTiddler({ title: 'Changed here', text: 'lost on close' }); true", true));
+	// TiddlyWiki counts it as unsaved
+	await expect(win.locator("body.tc-dirty")).toHaveCount(1);
+	const snapshotWindows = () => desk.app.evaluate(({ BrowserWindow }) => BrowserWindow.getAllWindows().filter(w => w.webContents.getURL().endsWith("snapshot.html")).length);
+	const close = () => desk.app.evaluate(({ BrowserWindow }) => BrowserWindow.getAllWindows().find(w => w.webContents.getURL().endsWith("snapshot.html")).close());
+	const questions = async () => (await desk.mainCalls()).questions;
+
+	// "Stay": the window stays open
+	await desk.answer(1);
+	await close();
+	await expect.poll(questions).toEqual(["Close the snapshot of “Site”?"]);
+	expect(await snapshotWindows()).toBe(1);
+
+	// "Close anyway": it closes
+	await desk.answer(0);
+	await close();
+	await expect.poll(snapshotWindows).toBe(0);
+	expect(await questions()).toHaveLength(2);
+});

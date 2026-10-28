@@ -92,6 +92,9 @@ folders** – use copies (see Testing).
   `protocol.ext.allow=never`), groups by name, wikis, web wikis, store, libraries, settings. Nothing is overwritten:
   existing wikis/links are skipped, store plugins only replaced by newer versions. `folderGitInfo()` re-spells git's
   repo root in the folder's spelling (8.3 names / case on Windows) so the common base works.
+- **Closing wiki and snapshot windows:** TiddlyWiki's beforeunload warning (unsaved changes) makes Electron cancel the
+  close without any dialog – the window looked stuck. `confirmUnload()` handles `will-prevent-unload` with its own
+  question (*Close anyway* / *Stay*); while quitting it lets the window go without asking.
 - **Ports are automatic** (since 0.2.3): `config.basePort` + per wiki optional `fixedPort` and remembered
   `lastPort`. On start: fixed port, else `lastPort` if free, else the next free port from `basePort` – skipping other
   wikis' fixed and active ports and, if possible, their `lastPort`s (keeps URLs stable). Port choice is serialized
@@ -163,7 +166,7 @@ rules everywhere, so wikis stay usable on Windows. The manager window quits the 
 
 ## State (as of 2026-10-26)
 
-- Version 0.2.16 committed (export/import of the setup, separate Demo/Website pills, showcase links to plugins, plugin showcases, search across all plugin libraries, groups, descriptions, web wiki links with snapshots and change checks, update check per library, create/copy/delete wizards, automatic ports, git,
+- Version 0.2.17 committed (asking before closing wiki/snapshot windows with unsaved changes, safe config writes, export/import of the setup, separate Demo/Website pills, showcase links to plugins, plugin showcases, search across all plugin libraries, groups, descriptions, web wiki links with snapshots and change checks, update check per library, create/copy/delete wizards, automatic ports, git,
   Linux/macOS build targets, row menus and drag & drop). Builds are made by the user on Windows; this sandbox
   can't install Electron (no npm registry access). 0.2.0 was the first update from the short-path layout.
 - The user's plugins are still stored as tiddlers inside `_shared` (relink*, CPL-Repo, rimir/*,

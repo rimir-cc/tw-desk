@@ -71,9 +71,19 @@ function loadConfig() {
 	}
 }
 
+// Written to a temporary file first, so a reader (or a crash) never sees a half-written config
 function saveConfig() {
 	fs.mkdirSync(path.dirname(configPath()), { recursive: true });
-	fs.writeFileSync(configPath(), JSON.stringify(config, null, 2));
+	const text = JSON.stringify(config, null, 2);
+	const temp = configPath() + ".tmp";
+	try {
+		fs.writeFileSync(temp, text);
+		fs.renameSync(temp, configPath());
+	} catch (e) {
+		// e.g. Windows refuses the rename while another program has the file open
+		fs.rmSync(temp, { force: true });
+		fs.writeFileSync(configPath(), text);
+	}
 }
 
 function findWiki(id) {
@@ -432,6 +442,26 @@ function bringToFront(win) {
 	win.focus();
 }
 
+// TiddlyWiki asks before a page with unsaved changes is left (beforeunload). Electron shows no dialog for that and
+// just cancels the close, so the window seemed stuck: ask here instead. While quitting the servers are already
+// stopping, so the window is let go without asking.
+function confirmUnload(win, message, detail) {
+	win.webContents.on("will-prevent-unload", event => {
+		const leave = quitting || dialog.showMessageBoxSync(win, {
+			type: "question",
+			buttons: ["Close anyway", "Stay"],
+			defaultId: 1,
+			cancelId: 1,
+			title: "TW Desk",
+			message,
+			detail
+		}) === 0;
+		if (leave) {
+			event.preventDefault();
+		}
+	});
+}
+
 async function openWiki(id, external) {
 	const wiki = findWiki(id);
 	if (serverState(id).status !== "running") {
@@ -473,6 +503,7 @@ async function openWiki(id, external) {
 		event.preventDefault();
 		win.setTitle(wiki.name + " — " + title);
 	});
+	confirmUnload(win, "\u201c" + wiki.name + "\u201d has changes that haven't been saved yet.", "TiddlyWiki is still saving them to the wiki folder. Wait a moment and close the window again, or close it anyway and lose those changes.");
 	win.on("closed", () => wikiWindows.delete(id));
 	wikiWindows.set(id, win);
 	win.loadURL(url);
@@ -1544,6 +1575,7 @@ function openSnapshot(id) {
 		event.preventDefault();
 		win.setTitle(title + " — " + pageTitle);
 	});
+	confirmUnload(win, "Close the snapshot of \u201c" + link.name + "\u201d?", "Changes made in a snapshot are never saved – they are lost when the window closes. To keep working with this wiki, use \u201cMake wiki from snapshot\u2026\u201d in its \u22ef menu.");
 	win.on("closed", () => snapshotWindows.delete(id));
 	snapshotWindows.set(id, win);
 	win.loadFile(snapshotFile(id));

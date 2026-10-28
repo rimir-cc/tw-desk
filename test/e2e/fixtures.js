@@ -23,10 +23,14 @@ function escapeRegExp(text) {
 
 // Runs inside TW Desk's main process (serialized by Playwright, so no closures)
 function stubMainProcess({ dialog, shell }) {
-	const calls = globalThis.twDeskTest = { picks: [], opened: [], shown: [], trashed: [] };
+	const calls = globalThis.twDeskTest = { picks: [], saves: [], opened: [], shown: [], trashed: [] };
 	dialog.showOpenDialog = async () => {
 		const next = calls.picks.shift();
 		return next ? { canceled: false, filePaths: [next] } : { canceled: true, filePaths: [] };
+	};
+	dialog.showSaveDialog = async () => {
+		const next = calls.saves.shift();
+		return next ? { canceled: false, filePath: next } : { canceled: true };
 	};
 	shell.openExternal = async url => {
 		calls.opened.push(url);
@@ -134,6 +138,20 @@ class Desk {
 		return this.page.evaluate(() => window.testDialogs.splice(0));
 	}
 
+	// Next answer of the save dialog
+	saveAs(file) {
+		return this.app.evaluate((electron, target) => globalThis.twDeskTest.saves.push(target), file);
+	}
+
+	// Ends this TW Desk and starts a new one with an empty user-data folder ("another computer"); config as in launch()
+	async relaunchFresh(config = {}) {
+		this.dialogs = this.dialogs.concat((await this.page.evaluate(() => window.testDialogs).catch(() => null)) || []);
+		await this.app.context().tracing.stop();
+		await this.app.close();
+		this.userData = path.join(this.root, "userdata-" + crypto.randomUUID().slice(0, 8));
+		return this.launch(config);
+	}
+
 	// Next answer of the folder/file picker
 	pick(file) {
 		return this.app.evaluate((electron, picked) => globalThis.twDeskTest.picks.push(picked), file);
@@ -227,7 +245,7 @@ class Desk {
 			return;
 		}
 		const info = this.testInfo;
-		this.dialogs = (await this.page.evaluate(() => window.testDialogs).catch(() => null)) || [];
+		this.dialogs = this.dialogs.concat((await this.page.evaluate(() => window.testDialogs).catch(() => null)) || []);
 		try {
 			if (failed) {
 				for (const [index, win] of this.app.windows().entries()) {

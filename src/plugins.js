@@ -223,6 +223,26 @@ function writeToStore(fields, meta) {
 	return { kind: parsed.kind, name: parsed.name, title: fields.title, version: info.version || "" };
 }
 
+// A store plugin as one plugin tiddler (as libraries serve it; writeToStore() takes it back), with its store bookkeeping
+function readStorePlugin(kind, name) {
+	const dir = path.join(storeRoot, KINDS[kind].dir, ...name.split("/"));
+	const info = readJson(path.join(dir, "plugin.info"));
+	const file = path.join(dir, "tiddlers.json");
+	if (!fs.existsSync(file)) {
+		throw new Error(titleOf(kind, name) + " isn't stored the way TW Desk stores plugins (no tiddlers.json).");
+	}
+	const tiddlers = {};
+	for (const tiddler of readJson(file)) {
+		const fields = Object.assign({}, tiddler);
+		delete fields.title;
+		tiddlers[tiddler.title] = fields;
+	}
+	return {
+		fields: Object.assign({}, info, { title: info.title || titleOf(kind, name), text: JSON.stringify({ tiddlers }) }),
+		meta: readStoreMeta()[kind + "|" + name] || {}
+	};
+}
+
 function removeFromStore(kind, name) {
 	if (!KINDS[kind] || !name || name.includes("..")) {
 		throw new Error("Invalid plugin.");
@@ -548,6 +568,7 @@ module.exports = {
 	compareVersions,
 	listStore,
 	listBundled,
+	readStorePlugin,
 	removeFromStore,
 	detectLibrary,
 	libraryIndex,

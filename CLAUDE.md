@@ -17,6 +17,7 @@ folders** – use copies (see Testing).
   per-folder `tiddlywiki.info` plugin lists, moving wiki-stored plugins into the store.
 - `src/git.js` – git via the system `git` (no prompts: `GIT_TERMINAL_PROMPT=0`, `GCM_INTERACTIVE=never`), status from
   `status --porcelain=v2 -z`; `src/git-ui.js` – git chips, Git tab of the bottom panel, footer line.
+- `src/setup.js` – export/import of the setup (build the file, check it, plan an import); `src/setup-ui.js` – its dialog.
 - `src/web.js` – tiddlers and per-tiddler hashes of a single-file wiki's HTML (web wiki snapshots and change checks).
 - `src/preload.js` – `window.twDesk` API (contextBridge); `window.twDesk.plugins.*` for the plugins window.
 - `src/renderer.js` + `index.html` + `styles.css` – manager UI; `src/plugins-ui.js` – Plugins window
@@ -82,6 +83,15 @@ folders** – use copies (see Testing).
   `libraryLabel()` in plugins-ui.js turns these into "showcase <name>". `link.linkedPlugins` (titles, set via
   `plugins-link-showcase`, only for plugins in the snapshot) decides where `demoButtons()` offers a Demo button; it notes
   when the snapshot's version differs from the compared one (installed, used by the wiki, or newest library version).
+- **Export/import of the setup** (`src/setup.js`, UI `src/setup-ui.js`): one JSON file (`format: "tw-desk-setup"`,
+  `version`). Folders are stored relative to the common folder of the folders' and repo roots' parents (`origin.base`), or
+  absolute when there is none (different drives); `readSetup()` refuses `..`/absolute relative entries, so imports stay
+  inside the chosen folder. Store plugins travel as plugin tiddlers (`plugins.readStorePlugin` ↔ `writeToStore`); a
+  plugin's `library: "showcase:<old id>"` is mapped to the imported link's new id. Import = `planImport()` (pure, shown
+  to the user) then `runImport()` in main.js: clones (`git.clone`: no option-like or `ext::` URLs,
+  `protocol.ext.allow=never`), groups by name, wikis, web wikis, store, libraries, settings. Nothing is overwritten:
+  existing wikis/links are skipped, store plugins only replaced by newer versions. `folderGitInfo()` re-spells git's
+  repo root in the folder's spelling (8.3 names / case on Windows) so the common base works.
 - **Ports are automatic** (since 0.2.3): `config.basePort` + per wiki optional `fixedPort` and remembered
   `lastPort`. On start: fixed port, else `lastPort` if free, else the next free port from `basePort` – skipping other
   wikis' fixed and active ports and, if possible, their `lastPort`s (keeps URLs stable). Port choice is serialized
@@ -153,7 +163,7 @@ rules everywhere, so wikis stay usable on Windows. The manager window quits the 
 
 ## State (as of 2026-10-26)
 
-- Version 0.2.15 committed (separate Demo/Website pills, showcase links to plugins, plugin showcases, search across all plugin libraries, groups, descriptions, web wiki links with snapshots and change checks, update check per library, create/copy/delete wizards, automatic ports, git,
+- Version 0.2.16 committed (export/import of the setup, separate Demo/Website pills, showcase links to plugins, plugin showcases, search across all plugin libraries, groups, descriptions, web wiki links with snapshots and change checks, update check per library, create/copy/delete wizards, automatic ports, git,
   Linux/macOS build targets, row menus and drag & drop). Builds are made by the user on Windows; this sandbox
   can't install Electron (no npm registry access). 0.2.0 was the first update from the short-path layout.
 - The user's plugins are still stored as tiddlers inside `_shared` (relink*, CPL-Repo, rimir/*,

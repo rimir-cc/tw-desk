@@ -19,7 +19,7 @@
 
 <main>
 	<ul id="wiki-list"></ul>
-	<p id="empty-hint" class="muted" hidden>No wikis yet. Use “+ New” to create an empty wiki, convert a single-file wiki (.html) or add an existing wiki folder.</p>
+	<p id="empty-hint" class="muted" hidden>No wikis yet. Use “+ New” to create an empty wiki, convert a single-file wiki (.html) or add an existing wiki folder, or import a setup exported on another computer (+ New → Import setup…).</p>
 </main>
 
 <section id="log-panel" hidden>
@@ -185,6 +185,11 @@
 		<label class="inline"><input name="gitAutoCommit" type="checkbox"> Commit automatically when a wiki is stopped</label>
 		<div class="field-title">Web wikis</div>
 		<label class="inline"><input name="webCheck" type="checkbox"> Check web wikis for changes once a day</label>
+		<div class="field-title">Move or share this setup</div>
+		<div class="row">
+			<button type="button" id="export-setup" title="Write wikis (with their git remotes), groups, web wikis, store plugins, libraries and settings into one file">Export setup…</button>
+			<button type="button" id="import-setup" title="Set up TW Desk from an exported file: clones missing wikis, adds links and plugins">Import setup…</button>
+		</div>
 		<p id="settings-error" class="error" hidden></p>
 		<div class="actions">
 			<button type="button" id="cancel-settings">Cancel</button>
@@ -228,6 +233,18 @@
 	</form>
 </dialog>
 
+<dialog id="setup-dialog">
+	<form id="setup-form" method="dialog">
+		<h2 id="setup-title">Export setup</h2>
+		<div id="setup-body"></div>
+		<p id="setup-message" class="setup-message" hidden></p>
+		<div class="actions">
+			<button type="button" id="setup-cancel">Cancel</button>
+			<button type="submit" class="primary" id="setup-run">Export…</button>
+		</div>
+	</form>
+</dialog>
+
 <dialog id="includes-dialog">
 	<h2>Included folders</h2>
 	<p class="muted">Folders listed in the wikis' includeWikis, and which wikis include them.</p>
@@ -261,5 +278,6 @@
 <script src="search.js"></script>
 <script src="plugins-ui.js"></script>
 <script src="git-ui.js"></script>
+<script src="setup-ui.js"></script>
 </body>
 </html>

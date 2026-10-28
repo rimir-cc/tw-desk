@@ -33,6 +33,13 @@ contextBridge.exposeInMainWorld("twDesk", {
 		setList: (folder, kind, names) => ipcRenderer.invoke("plugins-set-list", folder, kind, names),
 		moveToStore: (folder, file) => ipcRenderer.invoke("plugins-move-to-store", folder, file)
 	},
+	setup: {
+		exportInfo: () => ipcRenderer.invoke("setup-export-info"),
+		export: choices => ipcRenderer.invoke("setup-export", choices),
+		open: () => ipcRenderer.invoke("setup-open"),
+		plan: base => ipcRenderer.invoke("setup-plan", base),
+		import: (base, choices) => ipcRenderer.invoke("setup-import", base, choices)
+	},
 	moveWiki: (id, delta) => ipcRenderer.invoke("move-wiki", id, delta),
 	webWikis: {
 		save: link => ipcRenderer.invoke("save-web-wiki", link),

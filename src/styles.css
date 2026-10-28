@@ -244,3 +244,16 @@ textarea, input:not([type=checkbox]):not([type=radio]) {
 .steps li.current { border-color: var(--accent); color: var(--text); font-weight: 600; }
 .steps li.done { color: var(--text); }
 #create-target { word-break: break-all; }
+
+/* Export / import of the setup */
+#setup-dialog { width: min(720px, 94vw); }
+#setup-body { max-height: 62vh; overflow: auto; }
+.setup-list { list-style: none; margin: 0 0 12px; padding: 0; }
+.setup-list li { margin-bottom: 6px; }
+.setup-list label.inline { align-items: flex-start; margin: 0; }
+.setup-list label.inline input { margin-top: 3px; }
+.setup-list .small { word-break: break-all; }
+.setup-message { white-space: pre-wrap; word-break: break-all; }
+.setup-report { list-style: none; padding: 0; white-space: pre-wrap; word-break: break-word; }
+.setup-report li { margin-bottom: 6px; }
+.setup-report li.failed { color: var(--error); }

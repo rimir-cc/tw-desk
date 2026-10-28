@@ -64,6 +64,20 @@ test("writeToStore replaces an older version and refuses non-plugins", () => {
 	assert.throws(() => plugins.writeToStore({ title: "$:/plugins/test/bad", text: "nope" }, {}), /no valid JSON/);
 });
 
+test("readStorePlugin gives back the plugin tiddler that writeToStore takes", () => {
+	const tiddler = pluginTiddler("$:/plugins/test/roundtrip", "3.1.0", { list: "readme" });
+	plugins.writeToStore(tiddler, { library: "showcase:abc" });
+	const { fields, meta } = plugins.readStorePlugin("plugin", "test/roundtrip");
+	assert.equal(fields.title, "$:/plugins/test/roundtrip");
+	assert.equal(fields.version, "3.1.0");
+	assert.deepEqual(JSON.parse(fields.text), JSON.parse(tiddler.text));
+	assert.equal(meta.library, "showcase:abc");
+	// Written again from what was read: the same files
+	const before = fs.readFileSync(store("plugins", "test", "roundtrip", "tiddlers.json"), "utf8");
+	plugins.writeToStore(fields, {});
+	assert.equal(fs.readFileSync(store("plugins", "test", "roundtrip", "tiddlers.json"), "utf8"), before);
+});
+
 test("removeFromStore removes the plugin and an empty author folder", () => {
 	plugins.writeToStore(pluginTiddler("$:/plugins/lonely/one", "1.0.0"), {});
 	plugins.removeFromStore("plugin", "lonely/one");

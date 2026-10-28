@@ -207,4 +207,17 @@ async function addRemote(root, url) {
 	await git(root, ["remote", "add", "origin", trimmed]);
 }
 
-module.exports = { version, repoRoot, status, fetch, commit, push, pull, init, addRemote };
+// For setups imported from a file: the URL comes from that file, so no options and no command-running transports
+async function clone(url, target, branch) {
+	if (!url || /^-/.test(url) || /^ext::/i.test(url)) {
+		throw new Error("Not a usable remote URL: " + url);
+	}
+	fs.mkdirSync(path.dirname(target), { recursive: true });
+	const args = ["-c", "protocol.ext.allow=never", "clone", "--quiet"];
+	if (branch) {
+		args.push("--branch", branch);
+	}
+	await git(path.dirname(target), args.concat("--", url, target), 600000);
+}
+
+module.exports = { version, repoRoot, status, fetch, commit, push, pull, init, addRemote, clone };

@@ -142,3 +142,17 @@ test("conflicts and an unfinished merge are reported", { skip }, async () => {
 	assert.equal(detached.detached, true);
 	assert.equal(detached.branch, null);
 });
+
+test("clone: a branch into a new folder; option-like and ext:: URLs are refused", { skip }, async () => {
+	const source = folder("clone-source");
+	await git.init(source);
+	sh(source, "checkout", "--quiet", "-b", "work");
+	const bare = path.join(dir, "clone-remote.git");
+	sh(dir, "clone", "--quiet", "--bare", source, bare);
+	const target = path.join(dir, "cloned", "deeper", "wiki");
+	await git.clone(bare, target, "work");
+	assert.equal(fs.readFileSync(path.join(target, "tiddlers", "Note.tid"), "utf8"), "title: Note\n\nfirst");
+	assert.equal((await git.status(target)).branch, "work");
+	await assert.rejects(git.clone("--upload-pack=evil", path.join(dir, "x")), /Not a usable remote URL/);
+	await assert.rejects(git.clone("ext::sh -c touch% /tmp/pwned", path.join(dir, "y")), /Not a usable remote URL/);
+});

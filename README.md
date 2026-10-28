@@ -53,10 +53,28 @@ Only the `Setup-*.exe` is needed for installing; the `.blockmap` file can be ign
 
 Plugins stored inside a wiki (not listed in `tiddlywiki.info`) are not updated by this; update them in the wiki.
 
-## Move to another computer
+## Move to another computer or share a setup
 
-Copy the installer, the `wikis` folder (keep `orga`, `priv-orga`, `_shared` side by side) and, if the paths stay the same, `config.json`.
-Otherwise re-add the wikis in the app. Copy this source folder (without `node_modules`, `dist`) only if you want to rebuild.
+**Settings → Export setup…** writes one file (`tw-desk-setup.json`) with the chosen wikis and the folders they include
+(paths relative to their common folder, plus each repository's remote URL and branch), their groups, descriptions, fixed
+ports and autostart, the chosen web wikis (showcase flags and plugin links; snapshots only if *Snapshots of web wikis* is
+ticked – otherwise they are downloaded again on import), the store plugins (as plugin tiddlers, so also those no library
+offers), the plugin libraries and the settings. The wikis' contents are not in the file.
+
+**+ New → Import setup…** (also in Settings) on the other computer, after installing TW Desk: choose the folder the wikis
+go into (the folders keep their places relative to each other, so `../_shared` includes keep working) and check the plan
+before anything happens:
+
+- a wiki folder that is already there is added to TW Desk; a missing one is **cloned** from its remote (one clone per
+  repository, using the system's git and its credential store – a colleague needs read access); folders without a
+  remote have to be copied there by hand (shown as *missing*); wikis already in TW Desk are skipped;
+- web wikis are added (with the embedded snapshot, or downloaded again); links whose address is already there are skipped;
+- store plugins are added unless the store has the same or a newer version (plugins are code that runs in the wikis
+  using them – only import them from people you trust);
+- missing libraries and groups are added; the settings are applied only if ticked (by default when TW Desk has no wikis yet).
+
+Importing the same file again does no harm. Ports, logs, backups and git credentials are never exported.
+Copy this source folder (without `node_modules`, `dist`) only if you want to rebuild.
 
 ## Troubleshooting
 

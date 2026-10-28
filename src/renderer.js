@@ -1234,7 +1234,9 @@ $("#new-menu").addEventListener("click", () => showMenu([
 	{ label: "Add existing wiki folder…", action: () => run(() => openDialog(null)), title: "A folder that contains tiddlywiki.info" },
 	{ label: "Web wiki link…", action: () => openLinkDialog(null), title: "Remember a wiki on the web: open it in the browser, keep a snapshot, see when it changes" },
 	"-",
-	{ label: "Group…", action: () => openGroupDialog(null), title: "A group to sort wikis into" }
+	{ label: "Group…", action: () => openGroupDialog(null), title: "A group to sort wikis into" },
+	"-",
+	{ label: "Import setup…", action: () => run(openImport), title: "Set up from a file exported with Settings → Export setup…" }
 ], $("#new-menu")));
 
 for (const copyButton of document.querySelectorAll("button.copy")) {
@@ -1268,8 +1270,11 @@ function applyState(newState) {
 	render();
 }
 
-api.onState(applyState);
-api.getState().then(applyState);
+// Only once every script is loaded: render() uses functions from git-ui.js and the others
+window.addEventListener("DOMContentLoaded", () => {
+	api.onState(applyState);
+	api.getState().then(applyState);
+});
 // Pick up changes made outside TW Desk (tiddlywiki.info files, git)
 window.addEventListener("focus", () => {
 	api.getState().then(applyState);

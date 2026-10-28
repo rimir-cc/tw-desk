@@ -8,6 +8,7 @@ const crypto = require("crypto");
 const plugins = require("./plugins");
 const git = require("./git");
 const web = require("./web");
+const setup = require("./setup");
 
 const DEFAULT_BASE_PORT = 8090;
 // Windows and (by default) macOS don't distinguish upper and lower case in paths
@@ -1667,6 +1668,359 @@ ipcMain.handle("stop-wiki", (event, id) => stopWiki(id));
 ipcMain.handle("open-wiki", (event, id, external) => openWiki(id, external));
 ipcMain.handle("show-folder", (event, id) => shell.openPath(findWiki(id).path));
 ipcMain.handle("copy-text", (event, text) => clipboard.writeText(String(text)));
+
+// ---------- export / import of the setup (src/setup.js) ----------
+
+let pendingSetup = null; // { file, setup } between opening a setup file and importing it
+
+// Repository root, remote URL and branch of a folder, or null (no git, not a repository)
+async function folderGitInfo(folder) {
+	if (gitState.version === undefined) {
+		gitState.version = await git.version();
+	}
+	const root = gitState.version ? await git.repoRoot(folder) : null;
+	if (!root) {
+		return null;
+	}
+	const status = await git.status(root);
+	// The branch on the remote ("origin/main" -> "main"), else the local one
+	const branch = status.upstream ? status.upstream.split("/").slice(1).join("/") : status.branch;
+	// Git spells the root its own way (long names, case, resolved links); keep the folder's spelling for the paths
+	let sameSpelling = root;
+	try {
+		const up = path.relative(fs.realpathSync.native(root), fs.realpathSync.native(folder));
+		if (!up.startsWith("..") && !path.isAbsolute(up)) {
+			sameSpelling = up ? path.resolve(folder, ...up.split(path.sep).map(() => "..")) : path.resolve(folder);
+		}
+	} catch (e) {
+		// keep git's spelling
+	}
+	return { root: sameSpelling, url: status.remoteUrl, branch };
+}
+
+// The managed wiki folders and those they include, for the chosen wikis
+function setupFolders(wikis) {
+	const folders = new Map();
+	for (const wiki of wikis) {
+		folders.set(folderKey(wiki.path), path.resolve(wiki.path));
+		for (const include of readIncludes(wiki.path).includes) {
+			if (include.exists) {
+				folders.set(folderKey(include.resolved), include.resolved);
+			}
+		}
+	}
+	return [...folders.values()];
+}
+
+ipcMain.handle("setup-export-info", async () => {
+	const included = setupFolders(config.wikis).filter(f => !config.wikis.some(w => folderKey(w.path) === folderKey(f)));
+	const gitOf = new Map();
+	for (const folder of setupFolders(config.wikis)) {
+		gitOf.set(folderKey(folder), await folderGitInfo(folder).catch(() => null));
+	}
+	const store = plugins.listStore();
+	return {
+		wikis: config.wikis.map(w => ({ id: w.id, name: w.name, path: w.path, git: gitOf.get(folderKey(w.path)) || null })),
+		included: included.map(f => ({ path: f, git: gitOf.get(folderKey(f)) || null })),
+		webWikis: config.webWikis.map(l => {
+			let size = 0;
+			try {
+				size = l.snapshot ? fs.statSync(snapshotFile(l.id)).size : 0;
+			} catch (e) {
+				// no snapshot file
+			}
+			return { id: l.id, name: l.name, url: l.url, snapshot: l.snapshot ? l.snapshot.date : null, size };
+		}),
+		store: store.length,
+		libraries: config.libraries.length
+	};
+});
+
+// Store plugins as plugin tiddlers; ones TW Desk can't read back are left out (their titles go to skipped)
+function storeForExport(skipped) {
+	const result = [];
+	for (const plugin of plugins.listStore()) {
+		try {
+			const stored = plugins.readStorePlugin(plugin.kind, plugin.name);
+			result.push({ fields: stored.fields, library: stored.meta.library });
+		} catch (e) {
+			skipped.push(plugin.title);
+		}
+	}
+	return result;
+}
+
+// choices: { wikis: [ids], webWikis: [ids], store, snapshots, libraries, settings }
+ipcMain.handle("setup-export", async (event, choices) => {
+	const wikis = config.wikis.filter(w => choices.wikis.includes(w.id));
+	const links = config.webWikis.filter(l => choices.webWikis.includes(l.id));
+	const skipped = [];
+	const folders = [];
+	for (const folder of setupFolders(wikis)) {
+		folders.push({ path: folder, git: await folderGitInfo(folder).catch(() => null) });
+	}
+	const setupData = setup.buildSetup({
+		app: app.getVersion(),
+		tiddlywiki: TW_VERSION,
+		platform: process.platform,
+		key: part => (CASE_INSENSITIVE_PATHS ? part.toLowerCase() : part),
+		groups: config.groups,
+		wikis,
+		folders,
+		webWikis: links.map(link => {
+			let html = null;
+			if (choices.snapshots && link.snapshot) {
+				try {
+					html = fs.readFileSync(snapshotFile(link.id), "utf8");
+				} catch (e) {
+					// exported without; the importer downloads it again
+				}
+			}
+			return { link, html };
+		}),
+		store: choices.store ? storeForExport(skipped) : null,
+		libraries: choices.libraries ? config.libraries : null,
+		settings: choices.settings ? { basePort: config.basePort, git: gitSettings(), webCheck: webCheckEnabled() } : null
+	});
+	const result = await dialog.showSaveDialog(managerWindow, {
+		title: "Export setup",
+		defaultPath: path.join(app.getPath("documents"), "tw-desk-setup.json"),
+		filters: [{ name: "TW Desk setup", extensions: ["json"] }]
+	});
+	if (result.canceled || !result.filePath) {
+		return null;
+	}
+	fs.writeFileSync(result.filePath, JSON.stringify(setupData, null, 1));
+	return { file: result.filePath, wikis: setupData.wikis.length, folders: setupData.folders.length, webWikis: setupData.webWikis.length, store: (setupData.store || []).length, skipped };
+});
+
+ipcMain.handle("setup-open", async () => {
+	const picked = await dialog.showOpenDialog(managerWindow, { title: "Import setup", properties: ["openFile"], filters: [{ name: "TW Desk setup", extensions: ["json"] }] });
+	if (picked.canceled || !picked.filePaths[0]) {
+		return null;
+	}
+	const file = picked.filePaths[0];
+	const data = setup.readSetup(fs.readFileSync(file, "utf8"));
+	pendingSetup = { file, setup: data };
+	const originBase = data.origin.base;
+	return {
+		file,
+		exported: data.exported,
+		app: data.app,
+		originBase,
+		// Same place as on the exporting computer, if that exists here
+		base: originBase && path.isAbsolute(originBase) && fs.existsSync(originBase) ? path.resolve(originBase) : null,
+		relative: data.folders.some(f => typeof f.folder === "string")
+	};
+});
+
+function importPlan(base) {
+	if (!pendingSetup) {
+		throw new Error("Open a setup file first.");
+	}
+	return setup.planImport(pendingSetup.setup, base ? path.resolve(base) : null, {
+		key: folderKey,
+		wikis: config.wikis,
+		webWikis: config.webWikis,
+		groups: config.groups,
+		libraries: config.libraries,
+		store: plugins.listStore(),
+		bundled: plugins.listBundled(),
+		compareVersions: plugins.compareVersions,
+		parseTitle: plugins.parseTitle
+	});
+}
+
+ipcMain.handle("setup-plan", (event, base) => importPlan(base));
+
+function importSettings(settings) {
+	if (validPort(Number(settings.basePort))) {
+		config.basePort = Number(settings.basePort);
+	}
+	const gitInput = settings.git || {};
+	const interval = Number(gitInput.interval);
+	const staleHours = Number(gitInput.staleHours);
+	config.git = Object.assign({}, gitSettings(), {
+		interval: Number.isInteger(interval) && (interval === 0 || interval >= 30) ? interval : gitSettings().interval,
+		fetch: gitInput.fetch === undefined ? gitSettings().fetch : !!gitInput.fetch,
+		staleHours: staleHours > 0 ? staleHours : gitSettings().staleHours,
+		autoCommitOnStop: !!gitInput.autoCommitOnStop
+	});
+	if (settings.webCheck !== undefined) {
+		config.webCheck = !!settings.webCheck;
+	}
+}
+
+// choices: { folders: [plan ids], webWikis: [plan ids], store, libraries, settings }. Returns [{ ok, text }]
+async function runImport(base, choices) {
+	const plan = importPlan(base);
+	const data = pendingSetup.setup;
+	const report = [];
+	const done = text => report.push({ ok: true, text });
+	const failed = text => report.push({ ok: false, text });
+	const chosen = plan.folders.filter(f => choices.folders.includes(f.id) && (f.action === "register" || f.action === "clone"));
+
+	// Repositories first (one clone per repository, even if it holds several wikis)
+	const clones = new Map();
+	for (const item of chosen.filter(f => f.action === "clone")) {
+		clones.set(folderKey(item.repoPath), item);
+	}
+	if (clones.size && gitState.version === undefined) {
+		gitState.version = await git.version();
+	}
+	for (const item of clones.values()) {
+		if (!gitState.version) {
+			failed("Git isn't installed, so " + item.url + " wasn't cloned.");
+			continue;
+		}
+		try {
+			await git.clone(item.url, item.repoPath, item.branch);
+			done("Cloned " + item.url + " into " + item.repoPath + ".");
+		} catch (e) {
+			failed("Could not clone " + item.url + ":\n" + e.message);
+		}
+	}
+
+	// Groups by name, then the wikis
+	const groupId = name => {
+		if (!name) {
+			return null;
+		}
+		let group = config.groups.find(g => g.name === name);
+		if (!group) {
+			const exported = data.groups.find(g => g.name === name) || {};
+			group = { id: crypto.randomUUID(), name };
+			if (exported.collapsed) {
+				group.collapsed = true;
+			}
+			config.groups.push(group);
+		}
+		return group.id;
+	};
+	for (const item of chosen.filter(f => f.wiki)) {
+		if (!setup.isWikiFolder(item.path)) {
+			failed("“" + item.name + "” wasn't added: no wiki in " + item.path + ".");
+			continue;
+		}
+		if (config.wikis.some(w => folderKey(w.path) === folderKey(item.path))) {
+			continue;
+		}
+		const entry = data.wikis.find(w => folderKey(setup.resolvePlace(w, plan.base) || "") === folderKey(item.path));
+		const wiki = { id: crypto.randomUUID(), name: entry.name, path: item.path, autostart: !!entry.autostart };
+		for (const key of ["description", "importedFrom", "copiedFrom"]) {
+			if (entry[key]) {
+				wiki[key] = entry[key];
+			}
+		}
+		let note = "";
+		if (entry.fixedPort) {
+			const clash = config.wikis.find(w => w.fixedPort === entry.fixedPort);
+			if (validPort(entry.fixedPort) && !clash) {
+				wiki.fixedPort = entry.fixedPort;
+			} else if (clash) {
+				note = " Its fixed port " + entry.fixedPort + " belongs to “" + clash.name + "” here, so it gets an automatic port.";
+			}
+		}
+		const group = groupId(entry.group);
+		if (group) {
+			wiki.group = group;
+		}
+		config.wikis.push(wiki);
+		done("Added the wiki “" + wiki.name + "” (" + item.path + ")." + note);
+	}
+	for (const item of plan.folders.filter(f => !f.wiki && choices.folders.includes(f.id) && f.action === "clone")) {
+		if (!setup.isWikiFolder(item.path)) {
+			failed("The included folder " + item.path + " is still missing.");
+		}
+	}
+
+	// Web wikis before the store: store plugins from a showcase refer to its link
+	const linkIds = new Map(); // id in the file -> new id
+	for (const item of plan.webWikis.filter(l => choices.webWikis.includes(l.id) && l.action === "add")) {
+		const entry = data.webWikis[item.id];
+		const link = { id: crypto.randomUUID(), name: String(entry.name || new URL(entry.url).host), url: entry.url };
+		if (entry.description) {
+			link.description = String(entry.description);
+		}
+		if (entry.showcase) {
+			link.showcase = true;
+		}
+		if (Array.isArray(entry.linkedPlugins) && entry.linkedPlugins.length) {
+			link.linkedPlugins = entry.linkedPlugins.map(String).sort();
+		}
+		if (entry.id) {
+			linkIds.set(entry.id, link.id);
+		}
+		config.webWikis.push(link);
+		let how = "";
+		if (entry.snapshotHtml) {
+			const buffer = Buffer.from(String(entry.snapshotHtml), "utf8");
+			const index = web.indexOf(buffer);
+			fs.mkdirSync(webDir(link.id), { recursive: true });
+			fs.writeFileSync(snapshotFile(link.id), buffer);
+			// Later checks tell whether the site changed since this snapshot
+			writeBaseline(link, {}, index);
+			const date = entry.snapshot && entry.snapshot.date ? entry.snapshot.date : new Date().toISOString();
+			link.snapshot = { date, size: index.size, tiddlers: index.tiddlers ? Object.keys(index.tiddlers).length : null, twVersion: index.twVersion };
+			how = " with its snapshot of " + date.slice(0, 10);
+			queueWeb(link.id, "checking", () => checkWebWiki(link.id)).catch(() => {});
+		} else if (entry.snapshot) {
+			how = "; its snapshot is being downloaded again";
+			queueWeb(link.id, "saving", () => saveSnapshot(link.id)).catch(() => {});
+		} else {
+			queueWeb(link.id, "checking", () => checkWebWiki(link.id)).catch(() => {});
+		}
+		done("Added the web wiki “" + link.name + "”" + how + ".");
+	}
+
+	if (choices.store) {
+		let count = 0;
+		for (const item of plan.store.filter(p => p.action === "add" || p.action === "update")) {
+			const entry = data.store[item.id];
+			let library = entry.library ? String(entry.library) : null;
+			if (library && library.startsWith(SHOWCASE_PREFIX)) {
+				const id = linkIds.get(library.slice(SHOWCASE_PREFIX.length));
+				library = id ? SHOWCASE_PREFIX + id : null;
+			}
+			try {
+				plugins.writeToStore(entry.fields, library ? { library } : {});
+				count++;
+			} catch (e) {
+				failed("Plugin " + item.title + " wasn't put into the store: " + e.message);
+			}
+		}
+		if (count) {
+			done("Put " + count + (count === 1 ? " plugin" : " plugins") + " into the store.");
+		}
+	}
+
+	if (choices.libraries) {
+		const added = plan.libraries.filter(l => l.action === "add");
+		for (const library of added) {
+			config.libraries.push({ url: library.url, type: library.type === "cpl" ? "cpl" : "tiddlywiki" });
+		}
+		if (added.length) {
+			done("Added " + added.length + (added.length === 1 ? " plugin library." : " plugin libraries."));
+		}
+	}
+
+	if (choices.settings && plan.settings) {
+		importSettings(plan.settings);
+		done("Applied the settings (start port " + config.basePort + ").");
+		scheduleGitChecks();
+		scheduleWebChecks();
+	}
+
+	saveConfig();
+	pushState();
+	checkGit({ fetch: false });
+	if (!report.length) {
+		done("Nothing to import.");
+	}
+	return report;
+}
+
+ipcMain.handle("setup-import", (event, base, choices) => runImport(base, choices));
 
 // ---------- app lifecycle ----------
 

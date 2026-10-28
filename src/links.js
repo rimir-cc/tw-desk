@@ -3,8 +3,8 @@
 // Links between wikis. Two interchangeable forms point to the same thing, a tiddler in the wiki with a link name:
 //   twdesk://<link name>/<title>                                   (scheme; TW Desk windows, and other programs once registered)
 //   http://127.0.0.1:<router port>/open/<link name>/<title>       (TW Desk's small web server; any browser)
-// Both are understood in TW Desk windows whatever form is chosen for copying. "twdesk-copy:<title>" is only used
-// inside TW Desk windows: the built-in plugin's button asks TW Desk to copy a link to that tiddler.
+// Both are understood in TW Desk windows whatever form is chosen for copying. "twdesk-copy:<title>[/<caption>]" is only
+// used inside TW Desk windows: the built-in plugin's button asks TW Desk to copy a link to that tiddler.
 
 const path = require("path");
 
@@ -47,15 +47,15 @@ function splitTarget(rest) {
 	return key ? { key, title } : null;
 }
 
-// What a URL clicked in a wiki asks for: { key, title }, { copy: title }, or null (not a TW Desk link)
+// What a URL clicked in a wiki asks for: { key, title }, { copy: title, caption }, or null (not a TW Desk link)
 function parseLink(url, routerPort) {
 	const text = String(url || "");
 	let match;
 	if ((match = /^twdesk:\/\/([^?#]*)/i.exec(text))) {
 		return splitTarget(match[1].replace(/\/+$/, ""));
 	}
-	if ((match = /^twdesk-copy:(.*)$/i.exec(text))) {
-		return { copy: safeDecode(match[1]) };
+	if ((match = /^twdesk-copy:([^/]*)(?:\/(.*))?$/i.exec(text))) {
+		return { copy: safeDecode(match[1]), caption: match[2] ? safeDecode(match[2]) : "" };
 	}
 	if ((match = /^http:\/\/(?:127\.0\.0\.1|localhost):(\d+)\/open\/([^?#]*)/i.exec(text)) && Number(match[1]) === routerPort) {
 		return splitTarget(match[2].replace(/\/+$/, ""));
@@ -74,9 +74,11 @@ function linkUrl(style, key, title, port) {
 	return style === "http" ? "http://127.0.0.1:" + port + "/open/" + target : SCHEME + "://" + target;
 }
 
-// The wikitext to paste: TiddlyWiki only treats http(s) and a few other schemes as external, so twdesk:// needs [ext[…]]
-function linkWikitext(style, key, title, port) {
-	const text = (title ? title + " (" + key + ")" : key).replace(/\|/g, "/").replace(/\]\]/g, "] ]");
+// The wikitext to paste: TiddlyWiki only treats http(s) and a few other schemes as external, so twdesk:// needs [ext[…]].
+// label: what the link shows instead of the title (the tiddler's caption)
+function linkWikitext(style, key, title, port, label) {
+	const shown = label || title;
+	const text = (shown ? shown + " (" + key + ")" : key).replace(/\|/g, "/").replace(/\]\]/g, "] ]");
 	const url = linkUrl(style, key, title, port);
 	return style === "http" ? "[[" + text + "|" + url + "]]" : "[ext[" + text + "|" + url + "]]";
 }

@@ -35,7 +35,8 @@ test("both link forms, and the copy request of the plugin button", () => {
 	assert.equal(links.parseLink("http://127.0.0.1:8090/open/orga/X", 8089), null);
 	assert.equal(links.parseLink("https://tiddlywiki.com/#X", 8089), null);
 	assert.equal(links.parseLink("twdesk://", 8089), null);
-	assert.deepEqual(links.parseLink("twdesk-copy:A%20%7CB", 8089), { copy: "A |B" });
+	assert.deepEqual(links.parseLink("twdesk-copy:A%20%7CB", 8089), { copy: "A |B", caption: "" });
+	assert.deepEqual(links.parseLink("twdesk-copy:2026%2F1/My%20caption%2Fx", 8089), { copy: "2026/1", caption: "My caption/x" });
 	assert.deepEqual(links.parseRouterPath("/open/orga/A%20B"), { key: "orga", title: "A B" });
 	assert.equal(links.parseRouterPath("/favicon.ico"), null);
 });
@@ -46,6 +47,8 @@ test("wikitext to paste: [ext[…]] for twdesk:// (TiddlyWiki wouldn't treat it 
 	// Characters that would end the link early are kept out of the text (the URL is encoded anyway)
 	assert.equal(links.linkWikitext("scheme", "orga", "a|b]]c", 8089), "[ext[a/b] ]c (orga)|twdesk://orga/a%7Cb%5D%5Dc]]");
 	assert.equal(links.linkWikitext("scheme", "orga", "", 8089), "[ext[orga|twdesk://orga]]");
+	// The caption is shown instead of the title (e.g. for timestamp titles)
+	assert.equal(links.linkWikitext("scheme", "orga", "20261028092438802", 8089, "Meeting notes"), "[ext[Meeting notes (orga)|twdesk://orga/20261028092438802]]");
 });
 
 test("the built-in plugin: loaded from its folder, copy button only in TW Desk windows", () => {
@@ -63,7 +66,14 @@ test("the built-in plugin: loaded from its folder, copy button only in TW Desk w
 		// What the plugin's startup module sets in a TW Desk window
 		$tw.wiki.addTiddler({ title: "$:/temp/tw-desk/window", text: "yes" });
 		assert.match(button(), /<button[^>]*aria-label="copy TW Desk link"/);
-		assert.equal($tw.wiki.filterTiddlers("[[A B/c]encodeuricomponent[]addprefix[twdesk-copy:]]")[0], "twdesk-copy:A%20B%2Fc");
+		// What the button sends: the title, and the caption if there is one
+		const param = () => /twdesk-copy:[^"]*/.exec($tw.wiki.renderText("text/plain", "text/vnd.tiddlywiki",
+			"<$tiddler tiddler=\"A/B\"><$text text={{{ [<currentTiddler>encodeuricomponent[]] [<currentTiddler>get[caption]encodeuricomponent[]] +[join[/]addprefix[twdesk-copy:]] }}}/></$tiddler>"))[0];
+		assert.match(fs.readFileSync(path.join(PLUGIN, "copy-button.tid"), "utf8"), /\[<currentTiddler>get\[caption\]encodeuricomponent\[\]\] \+\[join\[\/\]addprefix\[twdesk-copy:\]\]/);
+		assert.equal(param(), "twdesk-copy:A%2FB");
+		$tw.wiki.addTiddler({ title: "A/B", caption: "Nice / caption" });
+		assert.equal(param(), "twdesk-copy:A%2FB/Nice%20%2F%20caption");
+		assert.deepEqual(links.parseLink(param(), 8089), { copy: "A/B", caption: "Nice / caption" });
 	} finally {
 		fs.rmSync(dir, { recursive: true, force: true });
 	}

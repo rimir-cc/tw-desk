@@ -826,7 +826,9 @@ $("#show-settings").addEventListener("click", () => {
 	const linkConfig = state.links;
 	settingsForm.elements.linkStyle.value = linkConfig.style;
 	settingsForm.elements.linkPort.value = linkConfig.port;
+	settingsForm.elements.linkRouter.disabled = false;
 	settingsForm.elements.linkRouter.checked = linkConfig.router;
+	syncLinkRouter();
 	settingsForm.elements.linkScheme.checked = linkConfig.scheme;
 	settingsForm.elements.linkPlugin.checked = linkConfig.plugin;
 	$("#link-scheme-status").textContent = {
@@ -864,6 +866,23 @@ settingsForm.addEventListener("submit", async event => {
 });
 
 $("#cancel-settings").addEventListener("click", () => $("#settings-dialog").close());
+
+// Copied http links only work in browsers with the router running, so that form switches it on
+let routerChoice = false; // the checkbox as set by hand, restored when switching back to twdesk://
+function syncLinkRouter() {
+	const box = settingsForm.elements.linkRouter;
+	const http = settingsForm.elements.linkStyle.value === "http";
+	if (http && !box.disabled) {
+		routerChoice = box.checked;
+	}
+	box.checked = http || (box.disabled ? routerChoice : box.checked);
+	box.disabled = http;
+	box.title = http ? "Always on while “TW Desk link” copies http links" : "";
+}
+
+for (const radio of settingsForm.querySelectorAll("input[name=linkStyle]")) {
+	radio.addEventListener("change", syncLinkRouter);
+}
 
 // ---------- log panel ----------
 

@@ -48,6 +48,7 @@ function get(url, headers = {}) {
 
 test("TW Desk links: copy button, follow to a stopped and to a minimized wiki, unknown name, links from other programs", async ({ desk }) => {
 	const alpha = desk.wiki("alpha");
+	tw.writeTiddler(alpha, "20261028092438802", "a tiddler with a timestamp title", { caption: "Meeting notes" });
 	tw.writeTiddler(alpha, "Links", "[ext[Note (other)|twdesk://other/Note]]\n\n[ext[Second (other)|twdesk://other/Second]]\n\n[ext[nowhere|twdesk://nowhere/X]]");
 	const other = desk.wiki("other", "alpha");
 	tw.writeTiddler(other, "Note", "the note");
@@ -62,6 +63,10 @@ test("TW Desk links: copy button, follow to a stopped and to a minimized wiki, u
 	await links.getByRole("button", { name: "copy TW Desk link" }).click();
 	await expect.poll(async () => (await desk.mainCalls()).copied).toEqual(["[ext[Links (alpha)|twdesk://alpha/Links]]"]);
 	await expect(alphaWin.locator(".tc-notification")).toContainText("TW Desk link copied");
+	// A tiddler with a caption: the link shows the caption
+	const captioned = await navigate(alphaWin, "20261028092438802");
+	await captioned.getByRole("button", { name: "copy TW Desk link" }).click();
+	await expect.poll(async () => (await desk.mainCalls()).copied[1]).toBe("[ext[Meeting notes (alpha)|twdesk://alpha/20261028092438802]]");
 
 	// To a stopped wiki: started, its window opened, the tiddler shown
 	const otherWin = await desk.windowOpenedBy(() => links.locator("a", { hasText: "Note (other)" }).click());
@@ -81,9 +86,11 @@ test("TW Desk links: copy button, follow to a stopped and to a minimized wiki, u
 	await links.locator("a", { hasText: "nowhere" }).click();
 	await expect.poll(async () => (await desk.mainCalls()).questions).toEqual(["No wiki with the link name “nowhere” in TW Desk."]);
 
-	// A twdesk:// link clicked in another program
+	// A twdesk:// link clicked in another program; the wiki's log says it arrived
 	await fromOtherProgram(desk, "twdesk://alpha/Hello");
 	await expect.poll(() => story(alphaWin).then(list => list[0])).toBe("Hello");
+	const alphaId = (await desk.wikiState("Alpha")).id;
+	expect(await desk.page.evaluate(id => window.twDesk.getLogs(id), alphaId)).toContainEqual(expect.stringContaining("Link from another program: alpha / Hello"));
 });
 
 test("link names: same folder names reported and resolved; http links via the router; copied form as set", async ({ desk }) => {
@@ -121,9 +128,12 @@ test("link names: same folder names reported and resolved; http links via the ro
 	await page.locator("#show-settings").click();
 	await expect(page.locator("#settings-form input[name=linkStyle][value=scheme]")).toBeChecked();
 	await expect(page.locator("#link-scheme-status")).toHaveText("(only the installed TW Desk registers it)");
+	// http links need the router, so that form switches it on
+	await expect(page.locator("#settings-form [name=linkRouter]")).not.toBeChecked();
 	await page.locator("#settings-form input[name=linkStyle][value=http]").check();
+	await expect(page.locator("#settings-form [name=linkRouter]")).toBeChecked();
+	await expect(page.locator("#settings-form [name=linkRouter]")).toBeDisabled();
 	await page.locator("#settings-form [name=linkPort]").fill(String(ROUTER_PORT));
-	await page.locator("#settings-form [name=linkRouter]").check();
 	await page.locator("#settings-form button[type=submit]").click();
 	await expect(page.locator("#settings-dialog")).not.toBeVisible();
 	expect(desk.config().links).toEqual({ style: "http", port: ROUTER_PORT, router: true, scheme: true, plugin: true });
@@ -133,10 +143,15 @@ test("link names: same folder names reported and resolved; http links via the ro
 	const answer = await get(router + "/open/alpha-two/Hello%20there");
 	expect(answer.status).toBe(302);
 	expect(answer.location).toBe("http://127.0.0.1:" + (await desk.wikiState("Second")).port + "/#Hello%20there");
-	const asked = await get(router + "/open/alpha/Hello", { "Sec-Fetch-Site": "cross-site" });
+	// Something a page on another website loads by itself (an image here) doesn't start a wiki
+	const asked = await get(router + "/open/alpha/Hello", { "Sec-Fetch-Site": "cross-site", "Sec-Fetch-Mode": "no-cors", "Sec-Fetch-Dest": "image" });
 	expect(asked.status).toBe(200);
 	expect(asked.body).toContain("Open it with TW Desk");
 	expect((await desk.wikiState("First")).status).toBe("stopped");
+	// A clicked link does, also from another "site" (e.g. a wiki opened as localhost:<port>)
+	const clicked = await get(router + "/open/alpha/Hello", { "Sec-Fetch-Site": "cross-site", "Sec-Fetch-Mode": "navigate", "Sec-Fetch-Dest": "document" });
+	expect(clicked.status).toBe(302);
+	expect(clicked.location).toBe("http://127.0.0.1:" + (await desk.wikiState("First")).port + "/#Hello");
 	expect((await get(router + "/open/nowhere/X")).status).toBe(404);
 
 	// Copied links now use the http form; an http link in a TW Desk window is followed there, router or not

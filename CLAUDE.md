@@ -102,8 +102,11 @@ folders** – use copies (see Testing).
   (`handleDeskLink` → `followLink`: start, `openWiki` (returns the window), `showTiddler` = `$tw.Story.navigateTiddler`
   once `.tc-story-river` exists). Link name = `wiki.linkName` or the folder name; hand-set names must be unique,
   duplicates from folder names are only reported (chip, question on follow). `config.links` = { style, port, router,
-  scheme, plugin }. Router: `answerRouter` (302 to `<wiki url>#<title>`; `Sec-Fetch-Site: cross-site` gets a confirm
-  page). `twdesk://` is registered only when `app.isPackaged` (HKCU, no admin); links from other programs arrive via
+  scheme, plugin }. Router: `answerRouter` (302 to `<wiki url>#<title>`; runs while `router` or `style === "http"`;
+  cross-site requests that aren't top-level navigations get a confirm page – navigations must pass, a wiki opened as
+  `localhost:<port>` is cross-site to `127.0.0.1`). `bringToFront` uses a short always-on-top on Windows, which otherwise
+  refuses the foreground to a background app (links from the browser); links from outside are logged in the wiki's Log.
+  The copy request carries the caption (`twdesk-copy:<title>/<caption>`, both encoded), shown as the link text. `twdesk://` is registered only when `app.isPackaged` (HKCU, no admin); links from other programs arrive via
   `second-instance` argv / macOS `open-url` (`followArgv`). The built-in plugin `src/tw-plugins/tw-desk-links` is loaded
   with TiddlyWiki's `++<folder>` argument (never written into wikis); its button only shows when the user agent contains
   `TWDesk/` (set on wiki windows) and asks TW Desk to copy via `window.open("twdesk-copy:<title>")`, so TW Desk knows the
@@ -179,7 +182,7 @@ rules everywhere, so wikis stay usable on Windows. The manager window quits the 
 
 ## State (as of 2026-10-26)
 
-- Version 0.2.18 committed (links between wikis with twdesk:// and http forms and the built-in TW Desk links plugin, asking before closing wiki/snapshot windows with unsaved changes, safe config writes, export/import of the setup, separate Demo/Website pills, showcase links to plugins, plugin showcases, search across all plugin libraries, groups, descriptions, web wiki links with snapshots and change checks, update check per library, create/copy/delete wizards, automatic ports, git,
+- Version 0.2.19 committed (links between wikis with twdesk:// and http forms and the built-in TW Desk links plugin, asking before closing wiki/snapshot windows with unsaved changes, safe config writes, export/import of the setup, separate Demo/Website pills, showcase links to plugins, plugin showcases, search across all plugin libraries, groups, descriptions, web wiki links with snapshots and change checks, update check per library, create/copy/delete wizards, automatic ports, git,
   Linux/macOS build targets, row menus and drag & drop). Builds are made by the user on Windows; this sandbox
   can't install Electron (no npm registry access). 0.2.0 was the first update from the short-path layout.
 - The user's plugins are still stored as tiddlers inside `_shared` (relink*, CPL-Repo, rimir/*,

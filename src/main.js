@@ -464,6 +464,13 @@ function bringToFront(win) {
 	}
 	win.show();
 	win.moveTop();
+	// Windows doesn't let a program in the background take the foreground (e.g. for a link clicked in the browser):
+	// on top for a moment brings it there anyway
+	if (process.platform === "win32") {
+		win.setAlwaysOnTop(true);
+		win.focus();
+		win.setAlwaysOnTop(false);
+	}
 	win.focus();
 }
 
@@ -1783,7 +1790,7 @@ function handleDeskLink(url, fromWikiId) {
 	}
 	if (link.copy !== undefined) {
 		if (fromWikiId) {
-			copyDeskLink(fromWikiId, link.copy);
+			copyDeskLink(fromWikiId, link.copy, link.caption);
 		}
 	} else {
 		followLink(link.key, link.title).catch(e => linkMessage("Could not open the link.", e.message));
@@ -1791,11 +1798,11 @@ function handleDeskLink(url, fromWikiId) {
 	return true;
 }
 
-function copyDeskLink(id, title) {
+function copyDeskLink(id, title, caption) {
 	const wiki = findWiki(id);
 	const settings = linkSettings();
 	const key = links.linkKeyOf(wiki);
-	clipboard.writeText(links.linkWikitext(settings.style, key, title, settings.port));
+	clipboard.writeText(links.linkWikitext(settings.style, key, title, settings.port, caption));
 	const twice = wikisWithKey(key).length > 1 ? " Note: another wiki has the same link name “" + key + "” – give one of them its own in Edit…" : "";
 	const win = wikiWindows.get(id);
 	if (win && !win.isDestroyed()) {
@@ -1805,9 +1812,13 @@ function copyDeskLink(id, title) {
 }
 
 // Starts the wiki if needed, opens its window or brings it to the front, then shows the tiddler
-async function followLink(key, title) {
+// source: where the link came from, for the wiki's log ("another program" for links from outside TW Desk)
+async function followLink(key, title, source) {
 	const matches = wikisWithKey(key);
 	if (!matches.length) {
+		if (managerWindow && source) {
+			bringToFront(managerWindow);
+		}
 		linkMessage("No wiki with the link name “" + key + "” in TW Desk.", "A wiki's link name is the one set in its Edit dialog, otherwise the name of its folder.");
 		return;
 	}
@@ -1827,9 +1838,16 @@ async function followLink(key, title) {
 		}
 		wiki = matches[choice];
 	}
+	if (source) {
+		appendLog(wiki.id, "Link from " + source + ": " + key + (title ? " / " + title : ""));
+	}
 	const win = await openWiki(wiki.id);
-	if (title && win) {
-		await showTiddler(win, title);
+	if (win) {
+		if (title) {
+			await showTiddler(win, title);
+		}
+		// A new window or one that had to wait for the server may have lost the foreground meanwhile
+		bringToFront(win);
 	}
 }
 
@@ -1868,8 +1886,11 @@ async function answerRouter(req, res) {
 		return;
 	}
 	const what = (link.title ? "“" + link.title + "” in " : "") + "“" + link.key + "”";
-	// A page on another website can't start wikis on its own: it gets a button (clicking it is a same-origin request)
-	if (req.headers["sec-fetch-site"] === "cross-site") {
+	// A clicked link (a navigation of the page itself) is fine from anywhere – a wiki opened as localhost:<port> is another
+	// "site" than 127.0.0.1 for the browser. Requests a page makes on its own (images, scripts, frames) from another
+	// website get a button instead (clicking it is a same-origin request), so they can't start wikis unnoticed
+	const clicked = req.headers["sec-fetch-mode"] === "navigate" && req.headers["sec-fetch-dest"] === "document";
+	if (req.headers["sec-fetch-site"] === "cross-site" && !clicked) {
 		routerPage(res, 200, "Open " + what + "?", "<p><a href=\"" + escapeHtml(url.pathname + url.search) + "\">Open it with TW Desk</a></p>");
 		return;
 	}
@@ -1898,10 +1919,10 @@ async function answerRouter(req, res) {
 	res.end();
 }
 
-// (Re)starts the router as the settings say
+// (Re)starts the router as the settings say: always while http links are copied, otherwise if asked for
 function startRouter() {
 	const settings = linkSettings();
-	const port = settings.router ? settings.port : null;
+	const port = settings.router || settings.style === "http" ? settings.port : null;
 	if (router && router.port === port) {
 		return;
 	}
@@ -1955,7 +1976,7 @@ function followArgv(argv) {
 	const url = (argv || []).find(arg => /^twdesk:\/\//i.test(arg));
 	const link = url ? links.parseLink(url, linkSettings().port) : null;
 	if (link && link.key) {
-		followLink(link.key, link.title).catch(e => linkMessage("Could not open the link.", e.message));
+		followLink(link.key, link.title, "another program").catch(e => linkMessage("Could not open the link.", e.message));
 		return true;
 	}
 	return false;

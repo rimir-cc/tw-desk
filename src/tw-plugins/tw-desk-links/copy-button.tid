@@ -7,7 +7,7 @@ list-before: $:/core/ui/Buttons/more-tiddler-actions
 \whitespace trim
 <$list filter="[[$:/temp/tw-desk/window]get[text]match[yes]]" variable="ignore">
 <$button tooltip="Copy a TW Desk link to this tiddler (to paste into another wiki)" aria-label="copy TW Desk link" class=<<tv-config-toolbar-class>>>
-<$action-sendmessage $message="tm-open-external-window" $param={{{ [<currentTiddler>encodeuricomponent[]addprefix[twdesk-copy:]] }}}/>
+<$action-sendmessage $message="tm-open-external-window" $param={{{ [<currentTiddler>encodeuricomponent[]] [<currentTiddler>get[caption]encodeuricomponent[]] +[join[/]addprefix[twdesk-copy:]] }}}/>
 <$list filter="[<tv-config-toolbar-icons>match[yes]]" variable="ignore">
 {{$:/core/images/link}}
 </$list>

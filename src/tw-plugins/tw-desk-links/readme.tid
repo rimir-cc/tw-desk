@@ -2,7 +2,7 @@ title: $:/plugins/tw-desk/links/readme
 
 This plugin comes with TW Desk and is loaded by every wiki TW Desk serves; nothing of it is stored in the wiki folder.
 
-In a TW Desk window each tiddler gets a button ''TW Desk link'' (tiddler toolbar, or under "more"): it copies a link to the tiddler, ready to paste into another wiki, e.g.
+In a TW Desk window each tiddler gets a button ''TW Desk link'' (tiddler toolbar, or under "more"): it copies a link to the tiddler (showing its caption, if it has one), ready to paste into another wiki, e.g.
 
 ```
 [ext[Some tiddler (orga)|twdesk://orga/Some%20tiddler]]

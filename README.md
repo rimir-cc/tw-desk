@@ -38,8 +38,9 @@ its story – like a normal link, nothing in the window is reloaded.
 **Creating links:** every wiki TW Desk serves gets the built-in plugin *TW Desk links* (`$:/plugins/tw-desk/links`; it
 comes with TW Desk and is loaded when the wiki starts – nothing is written into the wiki folder or its git repository).
 In a TW Desk window each tiddler has a toolbar button **TW Desk link** (link icon; also under "more"): it copies a link
-to that tiddler, ready to paste into another wiki, and the wiki shows "TW Desk link copied". The button doesn't appear
-when the wiki is opened in a browser.
+to that tiddler, ready to paste into another wiki, and the wiki shows "TW Desk link copied". The link shows the
+tiddler's *caption* if it has one, otherwise its title (useful for timestamp titles like `20261028092438802`). The
+button doesn't appear when the wiki is opened in a browser.
 
 **Link names:** a link names its wiki by the wiki's *link name* – set in **Edit** (*Link name*), otherwise the name of
 the wiki's folder (`orga`, `priv-orga`, `_shared`). Folder names travel with git and with export/import, so links keep
@@ -54,17 +55,23 @@ that name asks which wiki is meant. Changing a link name breaks the links that u
 |---|---|---|
 | Copied as | `[ext[Plan (orga)\|twdesk://orga/Plan]]` | `[[Plan (orga)\|http://127.0.0.1:8089/open/orga/Plan]]` |
 | In TW Desk windows | yes | yes (also when the router is off) |
-| In a browser or another program (mail, Teams, a file) | after registration: the system asks once whether to open TW Desk; the wiki opens in a TW Desk window | with *Answer http links in browsers* on: TW Desk starts the wiki and sends the browser there (`…:<wiki port>/#Plan`, a new tab) |
-| Needs | the installed TW Desk (registered per user, no admin rights; *Open twdesk:// links from other programs*) | a free port (*Port for http links*, default start port − 1, e.g. 8089) and TW Desk running |
+| In a browser or another program (mail, Teams, a file) | after registration: the browser asks whether to open TW Desk (it can remember the answer); the wiki opens in a TW Desk window, which comes to the front. The browser keeps the tab it opened for the link (showing the `twdesk://` address) | TW Desk starts the wiki and sends the browser there (`…:<wiki port>/#Plan`, a new tab) |
+| Needs | the installed TW Desk (registered per user, no admin rights; *Open twdesk:// links from other programs*) | TW Desk running and a free port (*Port for http links*, default start port − 1, e.g. 8089); its small web server (*Answer http links in browsers*) is always on while http links are copied |
 
 `twdesk://` needs the `[ext[…]]` form because TiddlyWiki only treats `http`, `https`, `mailto` and a few other schemes as
 external links – a plain `[[…|twdesk://…]]` would link to a missing tiddler. Both forms are written by hand the same way:
 `twdesk://<link name>/<tiddler title, URL-encoded>` or `http://127.0.0.1:<port>/open/<link name>/<title>`; without a
-title (`twdesk://orga`) the wiki just opens. The http router only listens on 127.0.0.1; a request sent by another
-website gets a page with an *Open it with TW Desk* link instead of starting anything by itself.
+title (`twdesk://orga`) the wiki just opens. The http router only listens on 127.0.0.1. A clicked link works from
+anywhere (also from a wiki opened as `localhost:<port>`, which the browser counts as another site than `127.0.0.1`);
+what a page on another website loads by itself (images, scripts, frames) only gets a page with an *Open it with TW Desk*
+link, so it can't start wikis unnoticed.
+
+**Did a link arrive?** Links from other programs are noted in the target wiki's **Log** ("Link from another program:
+orga / Plan"). If Settings shows "Port … is in use by another program" next to *Answer http links in browsers*, choose
+another *Port for http links* (links copied with the old port then no longer work in browsers).
 
 **Settings → Links between wikis:** which form *TW Desk link* copies, the port for http links, whether to answer http
-links in browsers, whether to register `twdesk://` for other programs (status shown next to it; only the installed app
+links in browsers (also when twdesk:// links are copied, so older http links keep working), whether to register `twdesk://` for other programs (status shown next to it; only the installed app
 registers, not a development or test run), and whether to load the built-in plugin (applies when a wiki is restarted).
 Link names and these settings are part of Export/Import setup.
 

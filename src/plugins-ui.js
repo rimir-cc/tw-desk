@@ -579,32 +579,37 @@ function installedOf(title) {
 	return stored ? { version: stored.version, what: "the store has" } : null;
 }
 
-// "Demo" buttons for the showcases linked to the plugin. compare ({ version, what }, e.g. what: "the store has") adds
-// a note when the showcase's snapshot has another version
+// Pills for the showcases linked to the plugin: "Demo" (the snapshot in an app window, only if there is one) and
+// "Website ↗" (the default browser). compare ({ version, what }, e.g. what: "the store has") adds a note when the
+// snapshot has another version
 function demoButtons(title, compare) {
 	const showcases = pstate.showcases.filter(sc => sc.linked.includes(title));
+	const suffix = sc => (showcases.length > 1 ? ": " + sc.name : "");
+	const pill = (label, className, tooltip, action) => el("button", {
+		type: "button",
+		class: "demo " + className,
+		title: tooltip,
+		onclick: event => {
+			event.stopPropagation();
+			run(action);
+		}
+	}, label);
 	return showcases.map(sc => {
 		const entry = sc.entries.find(e => e.title === title);
-		const button = el("button", {
-			type: "button",
-			class: "ghost demo",
-			title: "Open the showcase \u201c" + sc.name + "\u201d" + (sc.snapshot ? " (snapshot " + sc.snapshot.slice(0, 10) + ")" : ""),
-			disabled: !sc.snapshot,
-			onclick: event => {
-				event.stopPropagation();
-				run(() => api.webWikis.openSnapshot(sc.id));
-			}
-		}, "Demo" + (showcases.length > 1 ? ": " + sc.name : ""));
+		const demo = sc.snapshot
+			? pill("Demo" + suffix(sc), "primary", "Open the snapshot of \u201c" + sc.name + "\u201d (" + sc.snapshot.slice(0, 10) + ") in a window", () => api.webWikis.openSnapshot(sc.id))
+			: null;
+		const website = pill("Website" + suffix(sc) + " ↗", "ghost", "Open " + sc.site + " in the default browser", () => api.webWikis.open(sc.id));
 		let note = null;
-		if (!entry) {
+		if (sc.snapshot && !entry) {
 			note = el("span", { class: "badge update", title: "The current snapshot of \u201c" + sc.name + "\u201d doesn't contain " + title + " any more." }, "not in the demo");
-		} else if (compare && compare.version && compareVersionsLoose(entry.version, compare.version) !== 0) {
+		} else if (entry && compare && compare.version && compareVersionsLoose(entry.version, compare.version) !== 0) {
 			note = el("span", {
 				class: "badge update",
-				title: "The showcase \u201c" + sc.name + "\u201d shows version " + (entry.version || "(none)") + "; " + compare.what + " " + compare.version + "."
+				title: "The snapshot of \u201c" + sc.name + "\u201d has version " + (entry.version || "(none)") + "; " + compare.what + " " + compare.version + ". The website may have moved on since."
 			}, "demo shows " + (entry.version || "no version"));
 		}
-		return el("span", { class: "demo-link" }, button, note);
+		return el("span", { class: "demo-link" }, demo, website, note);
 	});
 }
 

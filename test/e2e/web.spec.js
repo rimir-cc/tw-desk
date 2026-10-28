@@ -154,7 +154,19 @@ test("plugin showcase: folded plugin list, add to store, link, Demo buttons with
 	await expect(stored.locator(".demo-link .badge")).toHaveCount(0);
 	const win = await desk.windowOpenedBy(() => stored.getByRole("button", { name: "Demo" }).click());
 	expect(win.url()).toMatch(/^file:.*snapshot\.html$/);
+	// Already open but minimized: Demo brings that window back instead of doing nothing
+	const snapshotWindow = () => desk.app.evaluate(({ BrowserWindow }) => {
+		const found = BrowserWindow.getAllWindows().filter(w => w.webContents.getURL().endsWith("snapshot.html"));
+		return { count: found.length, minimized: found.length ? found[0].isMinimized() : null };
+	});
+	await desk.app.evaluate(({ BrowserWindow }) => BrowserWindow.getAllWindows().find(w => w.webContents.getURL().endsWith("snapshot.html")).minimize());
+	await expect.poll(snapshotWindow).toEqual({ count: 1, minimized: true });
+	await stored.getByRole("button", { name: "Demo" }).click();
+	await expect.poll(snapshotWindow).toEqual({ count: 1, minimized: false });
 	await win.close();
+	// "Website ↗" next to it opens the site in the default browser (stubbed)
+	await stored.getByRole("button", { name: "Website ↗" }).click();
+	await expect.poll(async () => (await desk.mainCalls()).opened).toContain(url);
 
 	// The site moves on to 1.0.0: after a new snapshot the Demo buttons say which version the demo shows
 	server.setPage("/showcase/index.html", showcasePage("1.0.0"));

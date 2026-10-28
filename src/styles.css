@@ -163,7 +163,8 @@ button.danger:hover:not(:disabled) { border-color: var(--error); color: var(--er
 .git-chip.bad { color: var(--error); border-color: var(--error); }
 span.git-chip { border: 1px solid var(--border); }
 .git-chip.showcase-chip { color: var(--accent); }
-button.demo { padding: 0 6px; font-size: 12px; color: var(--accent); }
+button.demo { padding: 0 8px; font-size: 12px; border-radius: 10px; margin-left: 4px; }
+button.demo.ghost { color: var(--accent); }
 .demo-link { white-space: nowrap; }
 .chip.differs { border-color: var(--starting); color: var(--starting); }
 .showcase-linked { display: flex; flex-wrap: wrap; align-items: center; gap: 6px; margin: 4px 0; }

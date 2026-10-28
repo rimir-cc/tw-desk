@@ -153,7 +153,7 @@ rules everywhere, so wikis stay usable on Windows. The manager window quits the 
 
 ## State (as of 2026-10-26)
 
-- Version 0.2.14 committed (showcase links to plugins with Demo buttons, plugin showcases, search across all plugin libraries, groups, descriptions, web wiki links with snapshots and change checks, update check per library, create/copy/delete wizards, automatic ports, git,
+- Version 0.2.15 committed (separate Demo/Website pills, showcase links to plugins, plugin showcases, search across all plugin libraries, groups, descriptions, web wiki links with snapshots and change checks, update check per library, create/copy/delete wizards, automatic ports, git,
   Linux/macOS build targets, row menus and drag & drop). Builds are made by the user on Windows; this sandbox
   can't install Electron (no npm registry access). 0.2.0 was the first update from the short-path layout.
 - The user's plugins are still stored as tiddlers inside `_shared` (relink*, CPL-Repo, rimir/*,

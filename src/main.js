@@ -421,6 +421,16 @@ function waitForRunning(id, timeoutMs) {
 	});
 }
 
+// focus() alone doesn't restore a minimized window (Windows), so the click seemed to do nothing
+function bringToFront(win) {
+	if (win.isMinimized()) {
+		win.restore();
+	}
+	win.show();
+	win.moveTop();
+	win.focus();
+}
+
 async function openWiki(id, external) {
 	const wiki = findWiki(id);
 	if (serverState(id).status !== "running") {
@@ -434,7 +444,7 @@ async function openWiki(id, external) {
 	}
 	const existing = wikiWindows.get(id);
 	if (existing && !existing.isDestroyed()) {
-		existing.focus();
+		bringToFront(existing);
 		return;
 	}
 	const win = new BrowserWindow({
@@ -1504,7 +1514,7 @@ function openSnapshot(id) {
 	}
 	const existing = snapshotWindows.get(id);
 	if (existing && !existing.isDestroyed()) {
-		existing.focus();
+		bringToFront(existing);
 		return;
 	}
 	const title = link.name + " (snapshot " + link.snapshot.date.slice(0, 10) + ")";

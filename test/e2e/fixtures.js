@@ -129,6 +129,11 @@ class Desk {
 		return this.app.evaluate(() => globalThis.twDeskTest);
 	}
 
+	// confirm()/alert() calls so far, and forgets them (so an expected error message doesn't fail the test)
+	takeDialogs() {
+		return this.page.evaluate(() => window.testDialogs.splice(0));
+	}
+
 	// Next answer of the folder/file picker
 	pick(file) {
 		return this.app.evaluate((electron, picked) => globalThis.twDeskTest.picks.push(picked), file);

@@ -55,6 +55,16 @@ test("Open shows the wiki in an app window", async ({ desk }) => {
 	expect(win.url()).toBe("http://127.0.0.1:" + port + "/");
 	await expect.poll(() => win.evaluate(() => window.$tw && $tw.wiki && $tw.wiki.getTiddlerText("Hello")), { timeout: 30000 }).toBe("Hello from alpha");
 
+	// Open again while that window is minimized: it comes back (no second window)
+	const wikiWindows = () => desk.app.evaluate(({ BrowserWindow }, address) => {
+		const found = BrowserWindow.getAllWindows().filter(w => w.webContents.getURL().startsWith(address));
+		return { count: found.length, minimized: found.length ? found[0].isMinimized() : null };
+	}, win.url());
+	await desk.app.evaluate(({ BrowserWindow }, address) => BrowserWindow.getAllWindows().find(w => w.webContents.getURL().startsWith(address)).minimize(), win.url());
+	await expect.poll(wikiWindows).toEqual({ count: 1, minimized: true });
+	await row.getByRole("button", { name: "Open", exact: true }).click();
+	await expect.poll(wikiWindows).toEqual({ count: 1, minimized: false });
+
 	// "Open in browser" goes to the default browser (stubbed)
 	await desk.rowMenu(row, "Open in browser");
 	await expect.poll(async () => (await desk.mainCalls()).opened).toContain("http://127.0.0.1:" + port + "/");

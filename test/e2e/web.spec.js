@@ -198,3 +198,68 @@ test("plugin showcase: folded plugin list, add to store, link, Demo buttons with
 	await dialog.locator("[data-tab=store]").click();
 	await expect(stored.getByRole("button", { name: "Demo" })).toHaveCount(0);
 });
+
+test("web wiki: address checks, unreachable site, new address with a new baseline, a page that isn't a wiki", async ({ desk, server }) => {
+	const url = server.setPage("/down/index.html", tw.wikiHtml([{ title: "Note", text: "here" }]));
+	const plainUrl = server.setPage("/plain/index.html", "<!doctype html><html><head><title>Plain</title></head><body><p>Just a page</p></body></html>");
+	const page = await desk.launch();
+	const error = page.locator("#link-error");
+	const fill = async address => {
+		await page.locator("#link-form [name=url]").fill(address);
+		await page.locator("#link-form button[type=submit]").click();
+	};
+
+	await desk.newMenu("Web wiki link…");
+	await fill("not an address");
+	await expect(error).toHaveText("Please enter a web address, e.g. https://groktiddlywiki.com/read/");
+	await fill("ftp://example.org/wiki.html");
+	await expect(error).toHaveText("Only http and https addresses are supported.");
+	// Without a name, the host is used
+	await fill(url);
+	await expect(page.locator("#link-dialog")).not.toBeVisible();
+	const host = new URL(url).host;
+	const row = desk.webRow(host);
+	await expect(row).toBeVisible();
+	await expect.poll(() => (desk.config().webWikis[0].check || {}).result).toBe("same");
+	const link = desk.config().webWikis[0];
+	const baselineFile = path.join(desk.userData, "web", link.id, "baseline.json");
+	const baseline = () => JSON.parse(fs.readFileSync(baselineFile, "utf8"));
+	expect(baseline().url).toBe(url);
+
+	// The same address twice
+	await desk.newMenu("Web wiki link…");
+	await fill(url);
+	await expect(error).toHaveText("This address is already in the list as \"" + host + "\".");
+	await page.locator("#cancel-link").click();
+
+	// The site is down: "unreachable", with the reason in the tooltip; back up: the chip goes away
+	server.removePage("/down/index.html");
+	await desk.rowMenu(row, "Check for changes");
+	await expect(row.locator(".git-chip.bad")).toHaveText("unreachable");
+	await expect(row.locator(".git-chip.bad")).toHaveAttribute("title", /HTTP 404/);
+	server.setPage("/down/index.html", tw.wikiHtml([{ title: "Note", text: "here" }]));
+	await desk.rowMenu(row, "Check for changes");
+	await expect(row.locator(".git-chip.bad")).toHaveCount(0);
+	expect(desk.config().webWikis[0].check.result).toBe("same");
+
+	// A new address: the old baseline says nothing about it, so a new one is recorded
+	await desk.rowMenu(row, "Edit…");
+	await expect(page.locator("#link-form [name=name]")).toHaveValue(host);
+	await page.locator("#link-form [name=name]").fill("Plain");
+	await fill(plainUrl);
+	await expect(page.locator("#link-dialog")).not.toBeVisible();
+	await expect.poll(() => baseline().url).toBe(plainUrl);
+	await desk.webIdle();
+	expect(desk.config().webWikis[0]).toMatchObject({ id: link.id, name: "Plain", url: plainUrl });
+	expect(desk.config().webWikis[0].check.result).toBe("same");
+
+	// It isn't a TiddlyWiki: no snapshot, an error message instead
+	const plainRow = desk.webRow("Plain");
+	await desk.rowMenu(plainRow, "Save snapshot");
+	await expect.poll(async () => (await page.evaluate(() => window.testDialogs)).length).toBe(1);
+	expect(await desk.takeDialogs()).toEqual([{ type: "alert", message: "This doesn't look like a TiddlyWiki: " + plainUrl }]);
+	await desk.webIdle();
+	expect(desk.config().webWikis[0].snapshot).toBeUndefined();
+	expect(fs.existsSync(path.join(desk.userData, "web", link.id, "snapshot.html"))).toBe(false);
+	await expect(plainRow.getByRole("button", { name: "Open ↗", exact: true })).toBeVisible();
+});

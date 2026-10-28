@@ -91,6 +91,10 @@ async function startServer() {
 			});
 			return base + path;
 		},
+		// The page is gone (404), e.g. a site that is down
+		removePage(path) {
+			content.pages.delete(path);
+		},
 		close() {
 			server.closeAllConnections();
 			return new Promise(resolve => server.close(resolve));

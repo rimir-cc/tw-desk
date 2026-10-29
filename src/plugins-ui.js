@@ -580,11 +580,13 @@ function installedOf(title) {
 }
 
 // Pills for the showcases linked to the plugin: "Demo" (the snapshot in an app window, only if there is one) and
-// "Website ↗" (the default browser). compare ({ version, what }, e.g. what: "the store has") adds a note when the
-// snapshot has another version
+// "Website ↗" (the default browser). With several showcases the pills carry the showcase's name and the Demo pill the
+// snapshot's version, so the demos can be told apart. compare ({ version, what }, e.g. what: "the store has") adds a
+// note when the snapshot has another version
 function demoButtons(title, compare) {
 	const showcases = pstate.showcases.filter(sc => sc.linked.includes(title));
 	const suffix = sc => (showcases.length > 1 ? ": " + sc.name : "");
+	const versionSuffix = entry => (showcases.length > 1 && entry && entry.version ? " (" + entry.version + ")" : "");
 	const pill = (label, className, tooltip, action) => el("button", {
 		type: "button",
 		class: "demo " + className,
@@ -597,7 +599,7 @@ function demoButtons(title, compare) {
 	return showcases.map(sc => {
 		const entry = sc.entries.find(e => e.title === title);
 		const demo = sc.snapshot
-			? pill("Demo" + suffix(sc), "primary", "Open the snapshot of \u201c" + sc.name + "\u201d (" + sc.snapshot.slice(0, 10) + ") in a window", () => api.webWikis.openSnapshot(sc.id))
+			? pill("Demo" + suffix(sc) + versionSuffix(entry), "primary", "Open the snapshot of \u201c" + sc.name + "\u201d (" + sc.snapshot.slice(0, 10) + ") in a window", () => api.webWikis.openSnapshot(sc.id))
 			: null;
 		const website = pill("Website" + suffix(sc) + " ↗", "ghost", "Open " + sc.site + " in the default browser", () => api.webWikis.open(sc.id));
 		let note = null;

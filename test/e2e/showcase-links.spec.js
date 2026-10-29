@@ -19,7 +19,7 @@ async function addShowcase(page, name, url) {
 
 test("two showcases for one plugin, links kept on edit, Unlink, a snapshot that lost the plugin", async ({ desk, server }) => {
 	const firstUrl = server.setPage("/first/index.html", tw.wikiHtml([pluginTiddler(WIDGET, "1.0.0"), pluginTiddler(HELPER, "1.0.0")]));
-	const secondUrl = server.setPage("/second/index.html", tw.wikiHtml([pluginTiddler(WIDGET, "1.0.0")]));
+	const secondUrl = server.setPage("/second/index.html", tw.wikiHtml([pluginTiddler(WIDGET, "1.1.0")]));
 	// Alpha uses the widget (from the store, installed below)
 	const alpha = desk.wiki("alpha");
 	const infoFile = path.join(alpha, "tiddlywiki.info");
@@ -50,13 +50,14 @@ test("two showcases for one plugin, links kept on edit, Unlink, a snapshot that 
 	await expect(card("First").locator("details summary")).toContainText("· 2 linked");
 	await expect(card("First").locator(".showcase-linked .chip")).toHaveText([/^demo\/helper 1\.0\.0/, /^demo\/widget 1\.0\.0/]);
 
-	// Wikis tab: one Demo and one Website pill per showcase, named after it
+	// Wikis tab: one Demo and one Website pill per showcase, named after it; the Demo pills show their snapshot's version,
+	// and the one that differs from the wiki's is marked
 	await dialog.locator("[data-tab=wikis]").click();
 	const used = dialog.locator("#tab-wikis .card", { hasText: "Alpha" }).locator("tr", { hasText: "demo/widget" });
 	await expect(used.locator(".badge").first()).toHaveText("store 1.0.0");
-	await expect(used.locator("button.demo")).toHaveText(["Demo: First", "Website: First ↗", "Demo: Second", "Website: Second ↗"]);
-	await expect(used.locator(".demo-link .badge")).toHaveCount(0);
-	const win = await desk.windowOpenedBy(() => used.getByRole("button", { name: "Demo: Second", exact: true }).click());
+	await expect(used.locator("button.demo")).toHaveText(["Demo: First (1.0.0)", "Website: First ↗", "Demo: Second (1.1.0)", "Website: Second ↗"]);
+	await expect(used.locator(".demo-link .badge")).toHaveText(["demo shows 1.1.0"]);
+	const win = await desk.windowOpenedBy(() => used.getByRole("button", { name: "Demo: Second (1.1.0)", exact: true }).click());
 	expect(win.url()).toContain(secondId);
 	await win.close();
 	await used.getByRole("button", { name: "Website: First ↗", exact: true }).click();
@@ -89,6 +90,7 @@ test("two showcases for one plugin, links kept on edit, Unlink, a snapshot that 
 	await expect(plugin("Second", "demo/widget")).toHaveCount(0);
 	await dialog.locator("[data-tab=wikis]").click();
 	await expect(used.locator(".demo-link .badge")).toHaveText(["not in the demo"]);
+	await expect(used.locator("button.demo")).toHaveText(["Demo: First (1.0.0)", "Website: First ↗", "Demo: Second", "Website: Second ↗"]);
 
 	// "Unlink" in the plugin table (the other way besides ✕)
 	await dialog.locator("[data-tab=showcases]").click();

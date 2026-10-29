@@ -9,3 +9,5 @@ In a TW Desk window each tiddler gets a button ''TW Desk link'' (tiddler toolbar
 ```
 
 Clicking such a link in a TW Desk window starts the target wiki if needed, opens or brings its window to the front and shows the tiddler. Which form is copied (`twdesk://…` or `http://127.0.0.1:…/open/…`) and the link name of a wiki are set in TW Desk (Settings, Edit).
+
+Opened in a browser (not a TW Desk window), the wiki hands `twdesk://` links over to TW Desk from the page itself, so no empty tab stays behind; the browser asks once whether to open TW Desk.

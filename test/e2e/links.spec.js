@@ -91,6 +91,33 @@ test("TW Desk links: copy button, follow to a stopped and to a minimized wiki, u
 	await expect.poll(() => story(alphaWin).then(list => list[0])).toBe("Hello");
 	const alphaId = (await desk.wikiState("Alpha")).id;
 	expect(await desk.page.evaluate(id => window.twDesk.getLogs(id), alphaId)).toContainEqual(expect.stringContaining("Link from another program: alpha / Hello"));
+
+	// The same wiki in a browser (a plain window, without TW Desk's user agent): no copy button, and a twdesk:// link
+	// is handed over from the page itself – a new tab would stay behind empty once the browser passed it on. Where the
+	// address goes from there is the browser's business (Electron hands it to the system without any event), so the
+	// page's own navigation is what's checked
+	const alphaUrl = "http://127.0.0.1:" + (await desk.wikiState("Alpha")).port + "/";
+	const browserLike = await desk.app.evaluate(async ({ BrowserWindow }, address) => {
+		const seen = globalThis.twDeskTest.browser = { newWindows: [] };
+		const win = new BrowserWindow({ show: false, webPreferences: { sandbox: true, contextIsolation: true, partition: "tw-desk-test-browser" } });
+		win.webContents.setWindowOpenHandler(({ url }) => {
+			seen.newWindows.push(url);
+			return { action: "deny" };
+		});
+		await win.loadURL(address);
+		return win.id;
+	}, alphaUrl);
+	const inBrowser = code => desk.app.evaluate(({ BrowserWindow }, [id, js]) => BrowserWindow.fromId(id).webContents.executeJavaScript(js, true), [browserLike, code]);
+	await expect.poll(() => inBrowser("!!(window.$tw && $tw.Story && document.querySelector('.tc-story-river'))"), { timeout: 30000 }).toBe(true);
+	await inBrowser("new $tw.Story({ wiki: $tw.wiki }).navigateTiddler('Links'); true");
+	await expect.poll(() => inBrowser("!!document.querySelector('.tc-tiddler-frame[data-tiddler-title=\"Links\"] a[href^=\"twdesk:\"]')")).toBe(true);
+	expect(await inBrowser("document.querySelectorAll('[aria-label=\"copy TW Desk link\"]').length")).toBe(0);
+	await inBrowser("window.testNavigations = []; navigation.addEventListener('navigate', event => window.testNavigations.push(event.destination.url)); true");
+	await inBrowser("document.querySelector('.tc-tiddler-frame[data-tiddler-title=\"Links\"] a[href^=\"twdesk:\"]').click(); true");
+	await expect.poll(() => inBrowser("window.testNavigations")).toEqual(["twdesk://other/Note"]);
+	expect(await inBrowser("location.href")).toBe(alphaUrl);
+	expect((await desk.mainCalls()).browser.newWindows).toEqual([]);
+	await desk.app.evaluate(({ BrowserWindow }, id) => BrowserWindow.fromId(id).destroy(), browserLike);
 });
 
 test("link names: same folder names reported and resolved; http links via the router; copied form as set", async ({ desk }) => {

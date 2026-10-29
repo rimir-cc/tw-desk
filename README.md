@@ -55,7 +55,7 @@ that name asks which wiki is meant. Changing a link name breaks the links that u
 |---|---|---|
 | Copied as | `[ext[Plan (orga)\|twdesk://orga/Plan]]` | `[[Plan (orga)\|http://127.0.0.1:8089/open/orga/Plan]]` |
 | In TW Desk windows | yes | yes (also when the router is off) |
-| In a browser or another program (mail, Teams, a file) | after registration: the browser asks whether to open TW Desk (it can remember the answer); the wiki opens in a TW Desk window, which comes to the front. The browser keeps the tab it opened for the link (showing the `twdesk://` address) | TW Desk starts the wiki and sends the browser there (`…:<wiki port>/#Plan`, a new tab) |
+| In a browser or another program (mail, Teams, a file) | after registration: the browser asks whether to open TW Desk (it can remember the answer); the wiki opens in a TW Desk window, which comes to the front. In a wiki served by TW Desk the built-in plugin hands the link over from the page itself; elsewhere the browser may keep an empty tab with the `twdesk://` address | TW Desk starts the wiki and sends the browser there (`…:<wiki port>/#Plan`, a new tab) |
 | Needs | the installed TW Desk (registered per user, no admin rights; *Open twdesk:// links from other programs*) | TW Desk running and a free port (*Port for http links*, default start port − 1, e.g. 8089); its small web server (*Answer http links in browsers*) is always on while http links are copied |
 
 `twdesk://` needs the `[ext[…]]` form because TiddlyWiki only treats `http`, `https`, `mailto` and a few other schemes as

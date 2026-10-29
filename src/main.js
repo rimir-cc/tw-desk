@@ -521,8 +521,9 @@ async function openWiki(id, external) {
 		autoHideMenuBar: true,
 		webPreferences: { contextIsolation: true, nodeIntegration: false, sandbox: true }
 	});
-	// The built-in plugin shows its copy button only where the user agent says TW Desk
-	win.webContents.setUserAgent(win.webContents.getUserAgent() + " TWDesk/" + app.getVersion());
+	// The built-in plugin shows its copy button only where the user agent says so. Not "TWDesk/": Electron puts the app
+	// name there in every window it opens
+	win.webContents.setUserAgent(win.webContents.getUserAgent() + " TWDeskWindow/" + app.getVersion());
 	// TW Desk links are handled here; links to other sites open in the default browser; links within the wiki stay
 	win.webContents.setWindowOpenHandler(({ url: target }) => {
 		if (handleDeskLink(target, id)) {

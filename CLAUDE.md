@@ -192,4 +192,4 @@ rules everywhere, so wikis stay usable on Windows. The manager window quits the 
   sq/editor-autolist); moving them to the store is the user's step in the Plugins window.
 - Wiki rows show Start/Stop, Open and a ⋯ menu (`src/menu.js`, also on right-click); reordering via the menu and
   drag & drop (`place-wiki`). The list doesn't re-render during a drag (`renderPending`).
-- Open question: the repository has no remote yet.
+- Remote: `origin` = https://github.com/rimir-cc/tw-desk (branch `master`). Pushing is done by the user on Windows (github.com isn't reachable from this sandbox).

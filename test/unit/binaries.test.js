@@ -126,7 +126,7 @@ test("fileNameFor: unsafe and long titles", () => {
 	assert.ok(long.length <= 120);
 	assert.ok(long.endsWith(".pdf"));
 	assert.equal(name("photo", "image/png"), "photo.png");
-	assert.equal(name("photo.PNG", "image/png"), "photo.PNG");
+	assert.equal(name("photo.PNG", "image/png"), "photo.png");
 });
 
 test("fileNameFor: clash and reuse", () => {
@@ -180,13 +180,24 @@ test("applyPolicy: externalize a binary file with .meta", () => {
 	assert.deepEqual(fs.readdirSync(path.join(dir, "files")), ["photo.png"]);
 });
 
-test("applyPolicy: externalize a binary file without .meta", () => {
+test("applyPolicy: a binary file without .meta is skipped", () => {
 	put("tiddlers/doc.pdf", PNG);
 	const result = binaries.applyPolicy(dir, "externalize");
-	assert.deepEqual(result.done, [{ title: "doc.pdf", action: "externalized", bytes: 100 }]);
-	assert.deepEqual(tidFields("tiddlers/doc.pdf.tid").fields,
-		{ title: "doc.pdf", type: "application/pdf", _canonical_uri: "files/doc.pdf" });
-	assert.deepEqual(read("files/doc.pdf"), PNG);
+	assert.deepEqual(result, { done: [], skipped: [{ title: "doc.pdf", reason: "no .meta file – TiddlyWiki titles it with its full path" }], errors: [] });
+	assert.deepEqual(read("tiddlers/doc.pdf"), PNG);
+	assert.deepEqual(fs.readdirSync(path.join(dir, "tiddlers")), ["doc.pdf"]);
+	assert.equal(exists("files"), false);
+	assert.deepEqual(binaries.applyPolicy(dir, "internalize"), { done: [], skipped: [], errors: [] });
+});
+
+test("applyPolicy: externalize lower-cases the extension in files/", () => {
+	put("tiddlers/SCAN.PDF", PNG);
+	put("tiddlers/SCAN.PDF.meta", "title: Scan\ntype: application/pdf\n");
+	const result = binaries.applyPolicy(dir, "externalize");
+	assert.deepEqual(result.done, [{ title: "Scan", action: "externalized", bytes: 100 }]);
+	assert.deepEqual(fs.readdirSync(path.join(dir, "files")), ["SCAN.pdf"]);
+	assert.deepEqual(read("files/SCAN.pdf"), PNG);
+	assert.equal(tidFields("tiddlers/SCAN.PDF.tid").fields._canonical_uri, "files/SCAN.pdf");
 });
 
 test("applyPolicy: externalize base64 in a .tid", () => {
@@ -202,6 +213,7 @@ test("applyPolicy: externalize base64 in a .tid", () => {
 test("applyPolicy: externalize refuses invalid base64 and an existing .tid", () => {
 	put("tiddlers/Bad.tid", "title: Bad\ntype: image/png\n\nnot*base64!");
 	put("tiddlers/x.png", PNG);
+	put("tiddlers/x.png.meta", "title: x.png\ntype: image/png\n");
 	put("tiddlers/x.png.tid", "title: Other\n\nhello");
 	const result = binaries.applyPolicy(dir, "externalize");
 	assert.deepEqual(result.done, []);

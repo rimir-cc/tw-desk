@@ -270,10 +270,10 @@ function fileNameFor(title, type, filesDir, sha256) {
 
 // A Windows-safe file name for a title, with the extension of the type
 function safeName(title, type) {
-	let ext = extensionFor(type);
+	// Always the lower-case extension: TW's /files/ route looks up the content type case-sensitively
+	const ext = extensionFor(type);
 	let stem = String(title).replace(/[<>:"/\\|?*\x00-\x1f]/g, "_").trim();
-	if (stem.toLowerCase().endsWith(ext.toLowerCase())) {
-		ext = stem.slice(stem.length - ext.length); // keep the title's spelling
+	if (stem.toLowerCase().endsWith(ext)) {
 		stem = stem.slice(0, stem.length - ext.length);
 	}
 	stem = stem.replace(/[. ]+$/, "");
@@ -297,6 +297,7 @@ function hashOf(bytes) {
 const TMP = ".tw-desk-tmp";
 const UNSAFE = "fields can't be written to a .tid/.meta file";
 const TWO_FILES = "two tiddler files with this title";
+const NO_META = "no .meta file – TiddlyWiki titles it with its full path";
 
 class Skip extends Error {}
 
@@ -369,7 +370,7 @@ function loadEmbedded(item) {
 		throw new Skip("the .meta file has a text or _canonical_uri field");
 	}
 	if (!fields.title) {
-		fields.title = item.title;
+		throw new Skip(NO_META);
 	}
 	if (!fields.type) {
 		fields.type = item.type;
@@ -528,6 +529,13 @@ function applyPolicy(folder, policy) {
 	removeTempFiles(path.join(folder, "files"), false);
 	const byTitle = new Map();
 	for (const item of scanFolder(folder).items) {
+		if (item.form === "file" && !item.meta) {
+			// Its title in TW is the absolute path; moving it would rename the tiddler
+			if (policy === "externalize") {
+				result.skipped.push({ title: item.title, reason: NO_META });
+			}
+			continue;
+		}
 		byTitle.set(item.title, (byTitle.get(item.title) || []).concat(item));
 	}
 	for (const [title, items] of byTitle) {

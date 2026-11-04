@@ -156,3 +156,25 @@ test("clone: a branch into a new folder; option-like and ext:: URLs are refused"
 	await assert.rejects(git.clone("--upload-pack=evil", path.join(dir, "x")), /Not a usable remote URL/);
 	await assert.rejects(git.clone("ext::sh -c touch% /tmp/pwned", path.join(dir, "y")), /Not a usable remote URL/);
 });
+
+test("ensureIgnored: appends once", () => {
+	const wiki = folder("ignore");
+	const file = path.join(wiki, ".gitignore");
+	assert.equal(git.ensureIgnored(wiki, "files/"), true);
+	assert.equal(fs.readFileSync(file, "utf8"), "files/\n");
+	assert.equal(git.ensureIgnored(wiki, "files/"), false);
+	assert.equal(fs.readFileSync(file, "utf8"), "files/\n");
+
+	fs.writeFileSync(file, "output/");
+	assert.equal(git.ensureIgnored(wiki, "files/"), true);
+	assert.equal(fs.readFileSync(file, "utf8"), "output/\nfiles/\n");
+});
+
+test("ensureIgnored: files/ stays out of git status", { skip }, async () => {
+	const wiki = folder("ignore-git");
+	await git.init(wiki);
+	git.ensureIgnored(wiki, "files/");
+	fs.mkdirSync(path.join(wiki, "files"), { recursive: true });
+	fs.writeFileSync(path.join(wiki, "files", "x.png"), "png");
+	assert.equal(sh(wiki, "status", "--porcelain").includes("files/"), false);
+});

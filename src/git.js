@@ -199,6 +199,17 @@ async function init(folder) {
 	await git(folder, ["commit", "--quiet", "-m", "TW Desk: initial commit"]);
 }
 
+// Adds a line to a folder's .gitignore (creates the file). Returns false if the exact line is already there.
+function ensureIgnored(folder, line) {
+	const ignoreFile = path.join(folder, ".gitignore");
+	const text = fs.existsSync(ignoreFile) ? fs.readFileSync(ignoreFile, "utf8") : "";
+	if (text.split(/\r?\n/).includes(line)) {
+		return false;
+	}
+	fs.writeFileSync(ignoreFile, text + (text && !text.endsWith("\n") ? "\n" : "") + line + "\n");
+	return true;
+}
+
 async function addRemote(root, url) {
 	const trimmed = (url || "").trim();
 	if (!trimmed) {
@@ -220,4 +231,4 @@ async function clone(url, target, branch) {
 	await git(path.dirname(target), args.concat("--", url, target), 600000);
 }
 
-module.exports = { version, repoRoot, status, fetch, commit, push, pull, init, addRemote, clone };
+module.exports = { version, repoRoot, status, fetch, commit, push, pull, init, ensureIgnored, addRemote, clone };

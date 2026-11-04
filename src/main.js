@@ -739,7 +739,10 @@ async function gitAction(action, folder, arg) {
 // Applies the binary policy, auto-commits (if enabled) the wiki's folder and its writable includes, then refreshes
 // their status
 async function afterStop(wiki) {
-	await applyBinaryPolicyLogged(wiki);
+	// A wiki the policy changed was rescanned already
+	if (!(await applyBinaryPolicyLogged(wiki))) {
+		scanBinaries([wiki.id]);
+	}
 	const folders = [path.resolve(wiki.path)].concat(readIncludes(wiki.path).includes.filter(i => i.exists).map(i => i.resolved));
 	if (gitState.version && gitSettings().autoCommitOnStop) {
 		const writable = [path.resolve(wiki.path)].concat(readIncludes(wiki.path).includes.filter(i => i.exists && !i.readOnly).map(i => i.resolved));
@@ -916,7 +919,8 @@ function logBinaryResult(wiki, policy, result) {
 function applyBinaryPolicy(wiki) {
 	return queueBinaries(() => {
 		const current = config.wikis.find(w => w.id === wiki.id);
-		if (!current) {
+		// Never while quitting: the app could exit in the middle of moving files
+		if (!current || quitting) {
 			return null;
 		}
 		const settings = binarySettingsOf(current);
@@ -1317,6 +1321,9 @@ ipcMain.handle("binaries-apply", async (event, id) => {
 	}
 	if (isRunningWiki(id)) {
 		throw new Error("Stop the wiki first.");
+	}
+	if (quitting) {
+		throw new Error("TW Desk is quitting.");
 	}
 	return applyBinaryPolicy(wiki);
 });
@@ -2643,7 +2650,13 @@ if (!app.requestSingleInstanceLock()) {
 		followArgv(process.argv);
 		// Before autostart, while no wiki runs (a wiki started meanwhile by a link is skipped)
 		for (const wiki of config.wikis.slice()) {
+			if (quitting) {
+				return;
+			}
 			await applyBinaryPolicyLogged(wiki);
+		}
+		if (quitting) {
+			return;
 		}
 		scanBinaries();
 		scheduleBinaryScans();

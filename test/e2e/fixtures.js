@@ -184,9 +184,9 @@ class Desk {
 
 	// ---------- the main window ----------
 
-	// The row of the wiki with exactly this name (the name may be followed by its git chip "⎇ …")
+	// The row of the wiki with exactly this name (the name may be followed by its git chip "⎇ …" and binary chip "▣ …")
 	row(name) {
-		return this.page.locator("li.wiki:not(.web-link)").filter({ has: this.page.locator(".wiki-name", { hasText: new RegExp("^" + escapeRegExp(name) + "(\\s*⎇.*)?$") }) });
+		return this.page.locator("li.wiki:not(.web-link)").filter({ has: this.page.locator(".wiki-name", { hasText: new RegExp("^" + escapeRegExp(name) + "(\\s*[⎇▣].*)?$") }) });
 	}
 
 	groupHeader(name) {

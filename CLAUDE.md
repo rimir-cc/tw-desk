@@ -29,6 +29,7 @@ Windows, done by the user.
 - `src/links.js` – links between wikis (link names, both link forms, wikitext to copy); `src/tw-plugins/tw-desk-links/` –
   the built-in TiddlyWiki plugin with the *TW Desk link* button.
 - `src/setup.js` – export/import of the setup (build the file, check it, plan an import); `src/setup-ui.js` – its dialog.
+- `src/binaries.js` – scan, externalize and internalize of binary tiddlers in a wiki folder (pure fs, unit-tested).
 - `src/web.js` – tiddlers and per-tiddler hashes of a single-file wiki's HTML (web wiki snapshots and change checks).
 - `src/preload.js` – `window.twDesk` API (contextBridge); `window.twDesk.plugins.*` for the plugins window.
 - `src/renderer.js` + `index.html` + `styles.css` – manager UI; `src/plugins-ui.js` – Plugins window
@@ -132,6 +133,13 @@ Windows, done by the user.
   only and refused while a wiki using the repo runs; nothing is done in conflict/merge/detached state. Auto-commit
   on stop covers the wiki and its writable includes and is skipped while quitting. The Git tab re-renders on every
   state push, so the commit field keeps its draft (`gitDrafts`) and focus.
+- **Binary tiddlers** (`wiki.binaries` = { policy: leave|externalize|internalize, filesInGit }, scan in `binaryScan`): binary =
+  TiddlyWiki type with base64 encoding. Only the wiki's own `tiddlers/` changes, only while stopped/error, never while quitting;
+  runs after a stop (before auto-commit) and at start before autostart; a wiki included by another managed wiki is only
+  reported. Moves are crash-safe (write, verify size + sha256, then rewrite); all fields except `text` stay identical
+  (`modified` not bumped); `$:/` tiddlers untouched. Externalized = `.tid` with `_canonical_uri: files/<name>`, empty text;
+  `<name>` is the binary's own file name (lower-case extension, numbered on clashes). Binaries without `.meta` are never moved.
+  Internalize keeps the file in `files/`. `filesInGit: false` appends `files/` to `.gitignore` (never `git rm --cached`).
 - `TW_DESK_USER_DATA` env var overrides the user data folder (config, store, backup) – used for testing.
 
 ## Testing
@@ -149,6 +157,11 @@ Automated tests (`test/`):
   an `alert()` in the UI fails the test. Git (tests and the app under test) runs with `test/helpers/git-env.js`: an
   empty global config (branch `main`, no signing) and a test identity, never the user's git settings. Failed tests leave a trace, window screenshots and the main-process
   log under `test-results/` (in the repo, so they can be read here).
+- **Never show windows on the user's desktop.** WSL has WSLg (`DISPLAY=:0`, `WAYLAND_DISPLAY=wayland-0`), so Electron
+  windows from e2e or manual runs pop up on the user's screen and disturb them. In WSL run Electron/Playwright only
+  invisibly: `env -u WAYLAND_DISPLAY -u DISPLAY xvfb-run -a npx playwright test …` (both variables unset – with
+  `WAYLAND_DISPLAY` left set Electron may still use Wayland). The same applies to `npx electron .` for manual testing.
+  Don't wrap test runs in `git stash` (an interrupted run leaves the work stashed).
 
 Manual testing – never against the user's wikis or their `%APPDATA%\TW Desk`. Instead:
 
@@ -196,7 +209,7 @@ rules everywhere, so wikis stay usable on Windows. The manager window quits the 
 
 ## State (as of 2026-11-04)
 
-- Version 0.2.20 committed (links handed over from wikis in a browser, links between wikis with twdesk:// and http forms and the built-in TW Desk links plugin, asking before closing wiki/snapshot windows with unsaved changes, safe config writes, export/import of the setup, separate Demo/Website pills, showcase links to plugins, plugin showcases, search across all plugin libraries, groups, descriptions, web wiki links with snapshots and change checks, update check per library, create/copy/delete wizards, automatic ports, git,
+- Version 0.2.21 committed (binary tiddlers: per-wiki externalize/internalize policy with row chip; before that links handed over from wikis in a browser, links between wikis with twdesk:// and http forms and the built-in TW Desk links plugin, asking before closing wiki/snapshot windows with unsaved changes, safe config writes, export/import of the setup, separate Demo/Website pills, showcase links to plugins, plugin showcases, search across all plugin libraries, groups, descriptions, web wiki links with snapshots and change checks, update check per library, create/copy/delete wizards, automatic ports, git,
   Linux/macOS build targets, row menus and drag & drop). Builds are made by the user on Windows. 0.2.0 was the first
   update from the short-path layout.
 - The user's wikis list their plugins in `tiddlywiki.info` (e.g. `orga`: rimir/kind, rimir/ports, rimir/frontmatter,

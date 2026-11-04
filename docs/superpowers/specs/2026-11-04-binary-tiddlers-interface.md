@@ -29,6 +29,8 @@ both, and TW Desk never bumps `modified`.
 | embedded (standard import) | base64 content | – |
 | externalized | empty | `files/<name>` (relative to the wiki's URL; served by the TiddlyWiki server from `<wiki folder>/files/`) |
 
+`<name>` is the binary's own file name (Windows-safe, lower-case extension, numbered on clashes); only base64-in-`.tid` tiddlers get a name made from the title.
+
 A plugin should support both. TiddlyWiki's core already renders either state for image types and PDFs
 (`{{Title}}`, `<$image source="Title"/>`). To link/download the binary: `_canonical_uri` if set, else build a data URI
 from `type` + `text`.

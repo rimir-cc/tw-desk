@@ -66,6 +66,15 @@
 			<input name="linkName" maxlength="100">
 			<small class="muted">Names this wiki in links from other wikis (“TW Desk link” button), e.g. twdesk://orga/Some%20tiddler. Empty: the folder's name.</small>
 		</label>
+		<label>Binary tiddlers
+			<select name="binaryPolicy">
+				<option value="leave">Leave as is</option>
+				<option value="externalize">Externalize into files/</option>
+				<option value="internalize">Internalize from files/</option>
+			</select>
+		</label>
+		<label class="inline"><input name="filesInGit" type="checkbox" checked> Commit files/ with the wiki</label>
+		<small class="muted">Applied when the wiki stops and when TW Desk starts. Files already in git stay there.</small>
 		<label id="group-field">Group
 			<select name="group"></select>
 		</label>

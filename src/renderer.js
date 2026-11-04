@@ -160,6 +160,10 @@ function wikiItem(wiki, index, count) {
 	if (chip) {
 		name.append(" ", chip);
 	}
+	const binary = binaryChip(wiki);
+	if (binary) {
+		name.append(" ", binary);
+	}
 	// Links to this wiki would be ambiguous
 	const sameKey = state.wikis.filter(w => w.linkKey.toLowerCase() === wiki.linkKey.toLowerCase());
 	if (sameKey.length > 1) {
@@ -230,6 +234,65 @@ function wikiItem(wiki, index, count) {
 	return li;
 }
 
+function formatBytes(bytes) {
+	if (bytes < 1024) {
+		return bytes + " B";
+	}
+	const units = ["KB", "MB", "GB"];
+	let value = bytes / 1024;
+	let unit = 0;
+	while (value >= 1024 && unit < units.length - 1) {
+		value /= 1024;
+		unit++;
+	}
+	return (value < 10 ? value.toFixed(1).replace(/\.0$/, "") : Math.round(value)) + " " + units[unit];
+}
+
+const BINARY_POLICY_TEXT = { leave: "leave as is", externalize: "externalize into files/", internalize: "internalize from files/" };
+
+// Chip for binary tiddlers stored inside the wiki (or files that are gone); null when there is nothing to show
+function binaryChip(wiki) {
+	const scan = wiki.binaryScan;
+	if (!scan || scan.error) {
+		return null;
+	}
+	const policy = wiki.binaries.policy;
+	const embedded = scan.embedded;
+	const missing = scan.externalized.missing;
+	let text;
+	if (embedded.count > 0) {
+		text = "▣ " + embedded.count + " embedded · " + formatBytes(embedded.bytes);
+	} else if (missing > 0) {
+		text = "▣ " + missing + (missing === 1 ? " file missing" : " files missing");
+	} else {
+		return null;
+	}
+	const lines = [
+		"Binary tiddlers stored in tiddlers/: " + embedded.count + " (" + formatBytes(embedded.bytes) + ")",
+		"Externalized into files/: " + scan.externalized.count + " (" + formatBytes(scan.externalized.bytes) + ")" + (missing ? ", " + missing + " missing" : ""),
+		"In included folders (embedded): " + scan.includes.embedded.count + " (" + formatBytes(scan.includes.embedded.bytes) + ")",
+		"Policy: " + BINARY_POLICY_TEXT[policy]
+	];
+	if (scan.skipped) {
+		lines.push("Not movable: " + scan.skipped);
+	}
+	if (scan.blockedBy.length) {
+		lines.push("Not applied: included by " + scan.blockedBy.join(", "));
+	}
+	const last = scan.lastResult;
+	if (last) {
+		lines.push("Last run: " + last.done.length + " moved, " + last.skipped.length + " skipped, " + last.errors.length + " failed");
+		for (const skip of last.skipped.slice(0, 5)) {
+			lines.push("  \u201c" + skip.title + "\u201d skipped: " + skip.reason);
+		}
+		for (const error of last.errors.slice(0, 5)) {
+			lines.push("  \u201c" + error.title + "\u201d not moved: " + error.message);
+		}
+	}
+	const warn = (embedded.count > 0 && policy === "externalize") || missing > 0;
+	return Object.assign(document.createElement("span"), { className: "git-chip binary-chip" + (warn ? " warn" : ""), textContent: text, title: lines.join("\n") });
+}
+
 // The "⋯" menu and right-click menu of a wiki row; index and count: its position within its group
 function wikiMenu(wiki, index, count) {
 	const busy = wiki.status === "running" || wiki.status === "starting";
@@ -243,6 +306,20 @@ function wikiMenu(wiki, index, count) {
 		{ label: "Git", action: act(() => showPanel(wiki.id, "git")), disabled: !gitAvailable, title: gitAvailable ? "" : "Git isn't installed" },
 		"-",
 		{ label: "Edit…", action: act(() => openDialog(wiki)), disabled: busy, title: busy ? "Stop the wiki to edit it" : "" },
+		{
+			label: "Apply binary policy now",
+			action: act(async () => {
+				const result = await api.binaries.apply(wiki.id);
+				if (result === null) {
+					const scan = wiki.binaryScan;
+					if (scan && scan.blockedBy.length) {
+						alert("Not applied: this wiki is included by " + scan.blockedBy.join(", ") + ".");
+					}
+				}
+			}),
+			disabled: busy || wiki.binaries.policy === "leave",
+			title: busy ? "Stop the wiki first" : wiki.binaries.policy === "leave" ? "The policy is \u201cleave as is\u201d" : "Move binary tiddlers as the policy says"
+		},
 		{ label: "Copy…", action: act(() => openCreateWizard("copy", wiki)), title: "Create a new wiki as a copy of this one" },
 		"-",
 		{ label: "Move up", action: act(() => api.moveWiki(wiki.id, -1)), disabled: index === 0 },
@@ -938,6 +1015,8 @@ async function openDialog(wiki) {
 	form.elements.linkName.placeholder = wiki ? folderName(wiki.path) : "the folder's name";
 	form.querySelector(".port-hint").textContent = portHint();
 	form.elements.autostart.checked = wiki ? !!wiki.autostart : false;
+	form.elements.binaryPolicy.value = wiki ? wiki.binaries.policy : "leave";
+	form.elements.filesInGit.checked = wiki ? wiki.binaries.filesInGit : true;
 	groupOptions(form.elements.group, wiki && wiki.group);
 	$("#group-field").hidden = !state.groups.length;
 	// Includes are edited for existing wikis only; a new wiki gets its shared include via "Create new wiki"
@@ -1016,6 +1095,7 @@ form.addEventListener("submit", async event => {
 			fixedPort: form.elements.fixedPort.value.trim() || null,
 			linkName: form.elements.linkName.value.trim(),
 			autostart: form.elements.autostart.checked,
+			binaries: { policy: form.elements.binaryPolicy.value, filesInGit: form.elements.filesInGit.checked },
 			group: form.elements.group.value || null
 		});
 		if (editingId) {

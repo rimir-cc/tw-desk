@@ -144,8 +144,11 @@ match it.
   - on every derivative tiddler: `tw-desk-derived: thumb | page | sheet | text`, `derived-from: <original title>`,
     `derived-hash: <sha256 of the original content>`, `page: <n>` (pages), `sheet: <name>` (sheets);
   - on the original: `page-count`, `sheet-names` (TiddlyWiki title list), `text-truncated: yes` when the cap applied.
-  - `files/<name>` for externalized content: derived from the title (made file-system safe, extension from the type),
-    with a short suffix on clashes.
+  - `files/<name>` for externalized content: the binary keeps its own file name (Windows-safe, extension in lower
+    case, numbered on clashes). Only a tiddler with base64 inside a `.tid` gets a name derived from its title
+    (made file-system safe, extension from the type).
+  - Binaries without a `.meta` file are not moved: TiddlyWiki titles them with their full path, so there is no
+    title to keep. They are reported as skipped.
 - System tiddlers (`$:/…`, e.g. `$:/favicon.ico`) are never externalized and get no derivatives.
 - Generated images in `files/.derived` are left alone by internalize.
 - Policy runs at app start don't commit; the next commit (manual or auto-commit on stop) picks the change up.

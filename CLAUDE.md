@@ -4,9 +4,18 @@ Electron app (Windows) that manages local TiddlyWiki **folder wikis**: start/sto
 open wikis in app windows, edit `includeWikis`, and manage plugins via a shared store and plugin libraries.
 TiddlyWiki is bundled (pinned in `package.json`, currently 5.4.1). User-facing docs: `README.md`.
 
-The user's wikis live in `C:\data\22-tiddlydesktop\wikis\` (`orga`, `priv-orga`, `_shared`; `orga`, `priv-orga`
-and `_shared` are separate git repos). `orga` and `priv-orga` include `../_shared`. **Never test against these
-folders** – use copies (see Testing).
+The user's wikis live in `C:\data\22-tiddlydesktop\wikis\` (from WSL: `/mnt/c/data/22-tiddlydesktop/wikis`):
+`orga`, `priv-orga`, `orga-old`, `tw-knowledge` (each its own git repo) and `_empty`. `_shared` is a plain folder of
+shared wikis: `rr-core`, `rr-streams` and `contextualized` (only `contextualized` is its own repo). `orga` includes
+`../_shared/rr-core` and `../_shared/rr-streams`. Look at the folders before building test copies – the layout changes.
+**Never test against these folders** – use copies (see Testing).
+
+## Environment
+
+Claude works in WSL2 on the user's Windows machine. The checkout is `/home/mrichter/projects/tw-desk/tw-desk` (no
+`node_modules`); the user's Windows checkout `/mnt/c/data/22-tiddlydesktop/tw-desk` has Windows `node_modules` and
+`dist/`. Node (nvm), git, the npm registry and github.com are reachable. Electron, the e2e tests and builds run on
+Windows, done by the user.
 
 ## Layout
 
@@ -131,7 +140,8 @@ Automated tests (`test/`):
 
 - `npm test` – module tests with Node's test runner (`test/unit/`: web.js, search.js, git.js, plugins.js incl. a render
   with the bundled TiddlyWiki that loads a store plugin). No Electron needed (`test/helpers/electron-stub.js`), so they
-  run in this sandbox too: there `node_modules` is empty, so set `NODE_PATH` to a folder holding `tiddlywiki`.
+  run in WSL too: without a local `node_modules`, set `NODE_PATH` to a folder holding `tiddlywiki`, e.g.
+  `NODE_PATH=/mnt/c/data/22-tiddlydesktop/tw-desk/node_modules npm test` (~70 s).
 - `npm run test:e2e` – Playwright drives the real app (`_electron.launch`), run by the user on Windows. Each test gets
   a temp user-data folder, copies of template wikis made with the bundled TiddlyWiki, base port 18390 and a local
   server (`test/helpers/server.js`) standing in for the plugin libraries (standard + CPL) and web wikis.
@@ -142,7 +152,8 @@ Automated tests (`test/`):
 
 Manual testing – never against the user's wikis or their `%APPDATA%\TW Desk`. Instead:
 
-1. Copy `orga`, `priv-orga`, `_shared` into a temp folder (drop `.git`), keep them side by side.
+1. Copy the wikis you need (e.g. `orga` and `_shared`) into a temp folder (drop `.git`), keeping the same relative
+   layout so `includeWikis` paths like `../_shared/rr-core` still resolve.
 2. Write a test `config.json` into a temp user-data folder with a test `basePort` (e.g. 18090),
    pointing at the copies.
 3. Run from source: `TW_DESK_USER_DATA=<temp userdata> npx electron . --remote-debugging-port=9350`
@@ -183,13 +194,15 @@ rules everywhere, so wikis stay usable on Windows. The manager window quits the 
 - In this environment Bash heredocs can mangle backslashes (`\\` → `\`); use the Edit/Write tools for
   files containing backslashes (JSON with Windows paths, regexes).
 
-## State (as of 2026-10-26)
+## State (as of 2026-11-04)
 
 - Version 0.2.20 committed (links handed over from wikis in a browser, links between wikis with twdesk:// and http forms and the built-in TW Desk links plugin, asking before closing wiki/snapshot windows with unsaved changes, safe config writes, export/import of the setup, separate Demo/Website pills, showcase links to plugins, plugin showcases, search across all plugin libraries, groups, descriptions, web wiki links with snapshots and change checks, update check per library, create/copy/delete wizards, automatic ports, git,
-  Linux/macOS build targets, row menus and drag & drop). Builds are made by the user on Windows; this sandbox
-  can't install Electron (no npm registry access). 0.2.0 was the first update from the short-path layout.
-- The user's plugins are still stored as tiddlers inside `_shared` (relink*, CPL-Repo, rimir/*,
-  sq/editor-autolist); moving them to the store is the user's step in the Plugins window.
+  Linux/macOS build targets, row menus and drag & drop). Builds are made by the user on Windows. 0.2.0 was the first
+  update from the short-path layout.
+- The user's wikis list their plugins in `tiddlywiki.info` (e.g. `orga`: rimir/kind, rimir/ports, rimir/frontmatter,
+  rimir/kind-streams, rimir/streams-ports, rimir/drop-attach, kixam/datepicker, kixam/moment, kookma/commander), so
+  they come from the store rather than living as tiddlers in `_shared`.
 - Wiki rows show Start/Stop, Open and a ⋯ menu (`src/menu.js`, also on right-click); reordering via the menu and
   drag & drop (`place-wiki`). The list doesn't re-render during a drag (`renderPending`).
-- Remote: `origin` = https://github.com/rimir-cc/tw-desk (branch `master`). Pushing is done by the user on Windows (github.com isn't reachable from this sandbox).
+- Remote: `origin` = https://github.com/rimir-cc/tw-desk (branch `master`). github.com is reachable from WSL, but push
+  only when the user asks.

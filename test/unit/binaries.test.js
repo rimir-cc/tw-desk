@@ -135,3 +135,22 @@ test("fileNameFor: clash and reuse", () => {
 	assert.deepEqual(binaries.fileNameFor("photo", "image/png", filesDir, sha("new")), { name: "photo (2).png", reuse: false });
 	assert.deepEqual(binaries.fileNameFor("photo", "image/png", filesDir, sha("old")), { name: "photo.png", reuse: true });
 });
+
+test("fileNameFor: Windows reserved names", () => {
+	const filesDir = path.join(dir, "files");
+	const name = (title, type) => binaries.fileNameFor(title, type, filesDir, sha("x")).name;
+	assert.equal(name("CON", "image/png"), "CON_.png");
+	assert.equal(name("nul.tar", "application/pdf"), "nul_.tar.pdf");
+	assert.equal(name("com1", "image/png"), "com1_.png");
+	assert.equal(name("console", "image/png"), "console.png");
+});
+
+test("fileNameFor: numbering, empty stems, numbered reuse", () => {
+	const filesDir = path.join(dir, "files");
+	assert.equal(binaries.fileNameFor("...", "image/png", filesDir, sha("x")).name, "file.png");
+	assert.equal(binaries.fileNameFor(" ", "application/pdf", filesDir, sha("x")).name, "file.pdf");
+	put("files/photo.png", "a");
+	put("files/photo (2).png", "b");
+	assert.deepEqual(binaries.fileNameFor("photo", "image/png", filesDir, sha("c")), { name: "photo (3).png", reuse: false });
+	assert.deepEqual(binaries.fileNameFor("photo", "image/png", filesDir, sha("b")), { name: "photo (2).png", reuse: true });
+});

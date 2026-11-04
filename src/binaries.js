@@ -239,6 +239,8 @@ function fileNameFor(title, type, filesDir, sha256) {
 	stem = stem.replace(/[. ]+$/, "");
 	// Room for the extension and a " (n)" suffix
 	stem = stem.slice(0, 120 - ext.length - 8).replace(/[. ]+$/, "") || "file";
+	// Windows can't create CON.png, nul.tar.pdf etc.
+	stem = stem.replace(/^(con|prn|aux|nul|com[1-9]|lpt[1-9])(?=\.|$)/i, "$&_");
 	const hashOf = file => crypto.createHash("sha256").update(fs.readFileSync(file)).digest("hex");
 	for (let n = 1; ; n++) {
 		const name = stem + (n === 1 ? "" : " (" + n + ")") + ext;

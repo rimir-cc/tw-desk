@@ -19,6 +19,10 @@ contextBridge.exposeInMainWorld("twDesk", {
 	deleteCheck: id => ipcRenderer.invoke("delete-check", id),
 	deleteWiki: id => ipcRenderer.invoke("delete-wiki", id),
 	saveIncludes: (id, entries) => ipcRenderer.invoke("save-includes", id, entries),
+	binaries: {
+		apply: id => ipcRenderer.invoke("binaries-apply", id),
+		scan: id => ipcRenderer.invoke("binaries-scan", id)
+	},
 	plugins: {
 		getState: () => ipcRenderer.invoke("plugins-state"),
 		addLibrary: url => ipcRenderer.invoke("plugins-add-library", url),

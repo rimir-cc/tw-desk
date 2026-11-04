@@ -166,3 +166,23 @@ test("planImport: register, clone, already there, missing, blocked; store, links
 	plan = setup.planImport(data, null, env);
 	assert.ok(plan.folders.every(f => f.action === "missing" && /choose the folder/.test(f.note)));
 });
+
+test("export keeps the binary settings", () => {
+	const base = path.join(dir, "binaries", "wikis");
+	const data = setup.buildSetup({
+		app: "x", tiddlywiki: "x", platform: process.platform, key, groups: [], webWikis: [],
+		wikis: [
+			{ id: "a", name: "A", path: path.join(base, "a"), binaries: { policy: "externalize", filesInGit: false } },
+			{ id: "b", name: "B", path: path.join(base, "b") }
+		],
+		folders: [{ path: path.join(base, "a"), git: null }, { path: path.join(base, "b"), git: null }]
+	});
+	assert.deepEqual(data.wikis[0].binaries, { policy: "externalize", filesInGit: false });
+	assert.equal(data.wikis[1].binaries, undefined);
+	const plan = setup.planImport(setup.readSetup(JSON.stringify(data)), path.join(dir, "binaries", "import"), {
+		key, wikis: [], webWikis: [], groups: [], libraries: [], store: [], bundled: [],
+		compareVersions: (a, b) => a.localeCompare(b), parseTitle: () => null
+	});
+	assert.deepEqual(plan.folders[0].binaries, { policy: "externalize", filesInGit: false });
+	assert.equal(plan.folders[1].binaries, null);
+});

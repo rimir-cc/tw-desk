@@ -10,6 +10,7 @@ const git = require("./git");
 const web = require("./web");
 const setup = require("./setup");
 const links = require("./links");
+const binaries = require("./binaries");
 const http = require("http");
 
 const DEFAULT_BASE_PORT = 8090;
@@ -182,6 +183,8 @@ function wikiFromInput(input) {
 		}
 		wiki.group = input.group;
 	}
+	// The Edit dialog may leave them out: then the current settings stay
+	wiki.binaries = input.binaries === undefined || input.binaries === null ? binarySettingsOf(existing || {}) : binarySettingsFrom(input.binaries);
 	return wiki;
 }
 
@@ -214,7 +217,7 @@ function snapshot() {
 		webCheck: webCheckEnabled(),
 		links: linkState(),
 		webCollapsed: !!config.webCollapsed,
-		wikis: config.wikis.map(w => Object.assign({}, w, { group: groupOf(w), linkKey: links.linkKeyOf(w) }, serverState(w.id), { port: activePort(w.id), url: wikiUrl(w.id) }, readIncludes(w.path)))
+		wikis: config.wikis.map(w => Object.assign({}, w, { group: groupOf(w), linkKey: links.linkKeyOf(w) }, serverState(w.id), { port: activePort(w.id), url: wikiUrl(w.id) }, readIncludes(w.path), { binaries: binarySettingsOf(w), binaryScan: binaryScans.get(w.id) || null }))
 	};
 }
 
@@ -733,8 +736,10 @@ async function gitAction(action, folder, arg) {
 	await checkGit({ fetch: false });
 }
 
-// Auto-commit (if enabled) the wiki's folder and its writable includes, then refresh their status
+// Applies the binary policy, auto-commits (if enabled) the wiki's folder and its writable includes, then refreshes
+// their status
 async function afterStop(wiki) {
+	await applyBinaryPolicyLogged(wiki);
 	const folders = [path.resolve(wiki.path)].concat(readIncludes(wiki.path).includes.filter(i => i.exists).map(i => i.resolved));
 	if (gitState.version && gitSettings().autoCommitOnStop) {
 		const writable = [path.resolve(wiki.path)].concat(readIncludes(wiki.path).includes.filter(i => i.exists && !i.readOnly).map(i => i.resolved));
@@ -754,6 +759,213 @@ async function afterStop(wiki) {
 		}
 	}
 	await checkGit({ folders });
+}
+
+// ---------- binary tiddlers (src/binaries.js) ----------
+
+const BINARY_POLICIES = ["leave", "externalize", "internalize"];
+const BINARY_DEFAULTS = { policy: "leave", filesInGit: true };
+const BINARY_SCAN_INTERVAL = 10 * 60 * 1000;
+
+const binaryScans = new Map(); // wiki id -> summary (see scanWikiBinaries)
+let binaryQueue = Promise.resolve();
+let binaryTimer = null;
+
+// Checked settings from input (missing: the defaults); throws for an unknown policy
+function binarySettingsFrom(input) {
+	if (input === undefined || input === null) {
+		return Object.assign({}, BINARY_DEFAULTS);
+	}
+	if (typeof input !== "object") {
+		throw new Error("Unknown binary policy");
+	}
+	const policy = input.policy === undefined || input.policy === null ? BINARY_DEFAULTS.policy : input.policy;
+	if (!BINARY_POLICIES.includes(policy)) {
+		throw new Error("Unknown binary policy");
+	}
+	return { policy, filesInGit: input.filesInGit === undefined ? true : !!input.filesInGit };
+}
+
+// The settings of a wiki from the config (older configs have none)
+function binarySettingsOf(wiki) {
+	try {
+		return binarySettingsFrom(wiki.binaries);
+	} catch (e) {
+		return Object.assign({}, BINARY_DEFAULTS);
+	}
+}
+
+// Names of the other managed wikis that include this wiki's folder
+function includedBy(wiki) {
+	const own = folderKey(wiki.path);
+	return config.wikis.filter(w => w.id !== wiki.id && readIncludes(w.path).includes.some(i => folderKey(i.resolved) === own)).map(w => w.name);
+}
+
+function isRunningWiki(id) {
+	const s = servers.get(id);
+	return !!(s && (s.child || s.status === "running" || s.status === "starting"));
+}
+
+// Log lines need a server entry, also for wikis that weren't started yet
+function binaryLog(id, text) {
+	if (!servers.has(id)) {
+		servers.set(id, { child: null, status: "stopped", error: null, logs: [] });
+	}
+	appendLog(id, text);
+}
+
+function formatBytes(bytes) {
+	if (bytes < 1024) {
+		return bytes + " B";
+	}
+	const units = ["KB", "MB", "GB"];
+	let value = bytes / 1024;
+	let unit = 0;
+	while (value >= 1024 && unit < units.length - 1) {
+		value /= 1024;
+		unit++;
+	}
+	return (value < 10 ? value.toFixed(1) : Math.round(value)) + " " + units[unit];
+}
+
+function scanWikiBinaries(wiki) {
+	const previous = binaryScans.get(wiki.id);
+	const summary = {
+		embedded: { count: 0, bytes: 0 },
+		externalized: { count: 0, bytes: 0, missing: 0 },
+		skipped: 0,
+		includes: { embedded: { count: 0, bytes: 0 } },
+		blockedBy: [],
+		lastResult: previous ? previous.lastResult : null,
+		scannedAt: Date.now(),
+		error: null
+	};
+	try {
+		const scan = binaries.scanFolder(path.resolve(wiki.path));
+		summary.embedded = scan.embedded;
+		summary.externalized = scan.externalized;
+		summary.skipped = scan.skipped.length;
+		for (const include of readIncludes(wiki.path).includes.filter(i => i.exists)) {
+			const included = binaries.scanFolder(include.resolved);
+			summary.includes.embedded.count += included.embedded.count;
+			summary.includes.embedded.bytes += included.embedded.bytes;
+		}
+		summary.blockedBy = includedBy(wiki);
+	} catch (e) {
+		summary.error = e.message;
+	}
+	binaryScans.set(wiki.id, summary);
+}
+
+function queueBinaries(job) {
+	const result = binaryQueue.then(job);
+	binaryQueue = result.catch(() => {});
+	return result;
+}
+
+// Scans the given wikis (default: all) one after another, then tells the UI
+function scanBinaries(ids) {
+	return queueBinaries(async () => {
+		const wikis = ids ? config.wikis.filter(w => ids.includes(w.id)) : config.wikis;
+		for (const wiki of wikis) {
+			scanWikiBinaries(wiki);
+			// Lets other work in between on many or big wikis
+			await new Promise(resolve => setImmediate(resolve));
+		}
+		if (!ids) {
+			const known = new Set(config.wikis.map(w => w.id));
+			for (const id of binaryScans.keys()) {
+				if (!known.has(id)) {
+					binaryScans.delete(id);
+				}
+			}
+		}
+		pushState();
+	}).catch(e => console.error("binary scan failed:", e));
+}
+
+function scheduleBinaryScans() {
+	clearInterval(binaryTimer);
+	binaryTimer = setInterval(() => scanBinaries(), BINARY_SCAN_INTERVAL);
+}
+
+function logBinaryResult(wiki, policy, result) {
+	const sum = action => {
+		const items = result.done.filter(d => d.action === action);
+		return { count: items.length, bytes: items.reduce((total, d) => total + (d.bytes || 0), 0) };
+	};
+	const plural = count => count + (count === 1 ? " binary tiddler" : " binary tiddlers");
+	const moved = sum(policy === "externalize" ? "externalized" : "internalized");
+	if (moved.count) {
+		binaryLog(wiki.id, (policy === "externalize" ? "Externalized " : "Internalized ") + plural(moved.count) + " (" + formatBytes(moved.bytes) + ")" + (policy === "externalize" ? " into files/" : " into tiddlers/"));
+	}
+	const recovered = sum("recovered");
+	if (recovered.count) {
+		binaryLog(wiki.id, "Finished " + recovered.count + " interrupted binary " + (recovered.count === 1 ? "move" : "moves"));
+	}
+	for (const skip of result.skipped) {
+		binaryLog(wiki.id, "Binary tiddler \u201c" + skip.title + "\u201d skipped: " + skip.reason);
+	}
+	for (const error of result.errors) {
+		binaryLog(wiki.id, "Binary tiddler \u201c" + error.title + "\u201d not moved: " + error.message);
+	}
+}
+
+// Runs the wiki's policy now (queued). Null when there's nothing to do: "leave", the wiki runs, or another managed
+// wiki includes it. Throws (after logging) when the whole run failed.
+function applyBinaryPolicy(wiki) {
+	return queueBinaries(() => {
+		const current = config.wikis.find(w => w.id === wiki.id);
+		if (!current) {
+			return null;
+		}
+		const settings = binarySettingsOf(current);
+		// Checked again here: the wiki could have been started while this waited in the queue
+		if (settings.policy === "leave" || isRunningWiki(current.id)) {
+			return null;
+		}
+		const blockers = includedBy(current);
+		if (blockers.length) {
+			binaryLog(current.id, "Binary policy not applied: included by " + blockers.join(", "));
+			return null;
+		}
+		if (settings.policy === "externalize" && !settings.filesInGit) {
+			try {
+				if (git.ensureIgnored(path.resolve(current.path), "files/")) {
+					binaryLog(current.id, "Added files/ to .gitignore");
+				}
+			} catch (e) {
+				binaryLog(current.id, "Could not add files/ to .gitignore: " + e.message);
+			}
+		}
+		let result;
+		try {
+			// Synchronous, so nothing can start the wiki in the middle of it
+			result = binaries.applyPolicy(path.resolve(current.path), settings.policy);
+		} catch (e) {
+			binaryLog(current.id, "Binary policy failed: " + e.message);
+			result = { done: [], skipped: [], errors: [{ title: null, message: e.message }] };
+			scanWikiBinaries(current);
+			binaryScans.get(current.id).lastResult = result;
+			pushState();
+			throw e;
+		}
+		logBinaryResult(current, settings.policy, result);
+		scanWikiBinaries(current);
+		binaryScans.get(current.id).lastResult = result;
+		pushState();
+		return result;
+	});
+}
+
+// For automatic runs (after a stop, at start): failures are in the wiki's Log, TW Desk goes on
+async function applyBinaryPolicyLogged(wiki) {
+	try {
+		return await applyBinaryPolicy(wiki);
+	} catch (e) {
+		console.error("binary policy failed for " + wiki.name + ":", e);
+		return null;
+	}
 }
 
 // ---------- creating wikis ----------
@@ -1088,12 +1300,32 @@ ipcMain.handle("save-wiki", (event, input) => {
 	saveConfig();
 	pushState();
 	checkGit({ fetch: false });
+	scanBinaries();
 	return wiki.id;
 });
 
 ipcMain.handle("save-includes", (event, id, entries) => {
 	saveIncludes(id, entries);
 	checkGit({ fetch: false });
+	scanBinaries();
+});
+
+ipcMain.handle("binaries-apply", async (event, id) => {
+	const wiki = findWiki(id);
+	if (binarySettingsOf(wiki).policy === "leave") {
+		throw new Error("Policy is \"leave as is\".");
+	}
+	if (isRunningWiki(id)) {
+		throw new Error("Stop the wiki first.");
+	}
+	return applyBinaryPolicy(wiki);
+});
+
+ipcMain.handle("binaries-scan", (event, id) => {
+	if (id) {
+		findWiki(id);
+	}
+	return scanBinaries(id ? [id] : undefined);
 });
 
 // ---------- plugins ----------
@@ -2239,6 +2471,12 @@ async function runImport(base, choices) {
 			}
 		}
 		let note = "";
+		try {
+			wiki.binaries = binarySettingsFrom(entry.binaries);
+		} catch (e) {
+			wiki.binaries = binarySettingsFrom(null);
+			note += " Its binary policy isn't known here, so binary tiddlers are left as they are.";
+		}
 		if (entry.fixedPort) {
 			const clash = config.wikis.find(w => w.fixedPort === entry.fixedPort);
 			if (validPort(entry.fixedPort) && !clash) {
@@ -2342,6 +2580,7 @@ async function runImport(base, choices) {
 	saveConfig();
 	pushState();
 	checkGit({ fetch: false });
+	scanBinaries();
 	if (!report.length) {
 		done("Nothing to import.");
 	}
@@ -2392,21 +2631,27 @@ if (!app.requestSingleInstanceLock()) {
 		}
 	});
 
-	app.whenReady().then(() => {
+	app.whenReady().then(async () => {
 		plugins.init(app.getPath("userData"));
 		loadConfig();
 		createManagerWindow();
-		for (const wiki of config.wikis) {
-			if (wiki.autostart) {
-				startWiki(wiki.id);
-			}
-		}
 		scheduleGitChecks();
 		checkGit({ fetch: gitSettings().fetch });
 		scheduleWebChecks();
 		startRouter();
 		registerScheme();
 		followArgv(process.argv);
+		// Before autostart, while no wiki runs (a wiki started meanwhile by a link is skipped)
+		for (const wiki of config.wikis.slice()) {
+			await applyBinaryPolicyLogged(wiki);
+		}
+		scanBinaries();
+		scheduleBinaryScans();
+		for (const wiki of config.wikis) {
+			if (wiki.autostart) {
+				startWiki(wiki.id);
+			}
+		}
 	});
 
 	app.on("open-url", (event, url) => {

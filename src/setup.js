@@ -61,7 +61,7 @@ function buildSetup(input) {
 		groups: input.groups.filter(g => input.wikis.some(w => w.group === g.id)).map(g => ({ name: g.name, collapsed: !!g.collapsed })),
 		wikis: input.wikis.map(w => {
 			const wiki = Object.assign({ name: w.name }, place(w.path));
-			for (const key of ["description", "fixedPort", "linkName", "importedFrom"]) {
+			for (const key of ["description", "fixedPort", "linkName", "importedFrom", "binaries"]) {
 				if (w[key]) {
 					wiki[key] = w[key];
 				}
@@ -208,7 +208,8 @@ function planImport(setup, base, env) {
 			relative: entry.folder || entry.path,
 			path: target,
 			url: repo ? repo.url : null,
-			branch: repo ? repo.branch : null
+			branch: repo ? repo.branch : null,
+			binaries: wiki && wiki.binaries ? wiki.binaries : null
 		};
 		const inDesk = target && env.wikis.find(w => key(w.path) === key(target));
 		if (!target) {

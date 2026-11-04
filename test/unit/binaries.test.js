@@ -114,3 +114,24 @@ test("fieldsSafe", () => {
 	assert.equal(binaries.fieldsSafe({ title: "T", "a#b": "1" }), false);
 	assert.equal(binaries.fieldsSafe({ title: "T", text: " body\n" }), true);
 });
+
+const sha = content => require("crypto").createHash("sha256").update(content).digest("hex");
+
+test("fileNameFor: unsafe and long titles", () => {
+	const filesDir = path.join(dir, "files");
+	const name = (title, type) => binaries.fileNameFor(title, type, filesDir, sha("x")).name;
+	assert.equal(name("a<b>:c?.png", "image/png"), "a_b__c_.png");
+	assert.equal(name("Report. ", "application/pdf"), "Report.pdf");
+	const long = name("x".repeat(300), "application/pdf");
+	assert.ok(long.length <= 120);
+	assert.ok(long.endsWith(".pdf"));
+	assert.equal(name("photo", "image/png"), "photo.png");
+	assert.equal(name("photo.PNG", "image/png"), "photo.PNG");
+});
+
+test("fileNameFor: clash and reuse", () => {
+	const filesDir = path.join(dir, "files");
+	put("files/photo.png", "old");
+	assert.deepEqual(binaries.fileNameFor("photo", "image/png", filesDir, sha("new")), { name: "photo (2).png", reuse: false });
+	assert.deepEqual(binaries.fileNameFor("photo", "image/png", filesDir, sha("old")), { name: "photo.png", reuse: true });
+});

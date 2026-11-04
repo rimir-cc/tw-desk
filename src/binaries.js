@@ -5,6 +5,7 @@
 
 const fs = require("fs");
 const path = require("path");
+const crypto = require("crypto");
 
 // The base64 file types TiddlyWiki 5.4.1 registers (boot/boot.js, registerFileType), as [type, extensions]
 const BASE64_TABLE = [
@@ -226,4 +227,29 @@ function scanFolder(folder) {
 	return scan;
 }
 
-module.exports = { BASE64_TYPES, extensionFor, typeForExtension, parseFields, serializeFields, fieldsSafe, scanFolder };
+// A file name for a binary tiddler in filesDir: reuses an existing file with the same content,
+// otherwise avoids clashes with "name (2).ext"
+function fileNameFor(title, type, filesDir, sha256) {
+	let ext = extensionFor(type);
+	let stem = String(title).replace(/[<>:"/\\|?*\x00-\x1f]/g, "_").trim();
+	if (stem.toLowerCase().endsWith(ext.toLowerCase())) {
+		ext = stem.slice(stem.length - ext.length); // keep the title's spelling
+		stem = stem.slice(0, stem.length - ext.length);
+	}
+	stem = stem.replace(/[. ]+$/, "");
+	// Room for the extension and a " (n)" suffix
+	stem = stem.slice(0, 120 - ext.length - 8).replace(/[. ]+$/, "") || "file";
+	const hashOf = file => crypto.createHash("sha256").update(fs.readFileSync(file)).digest("hex");
+	for (let n = 1; ; n++) {
+		const name = stem + (n === 1 ? "" : " (" + n + ")") + ext;
+		const file = path.join(filesDir, name);
+		if (!fs.existsSync(file)) {
+			return { name, reuse: false };
+		}
+		if (hashOf(file) === sha256) {
+			return { name, reuse: true };
+		}
+	}
+}
+
+module.exports = { BASE64_TYPES, extensionFor, fileNameFor, typeForExtension, parseFields, serializeFields, fieldsSafe, scanFolder };

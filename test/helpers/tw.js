@@ -38,6 +38,18 @@ function writeTiddler(folder, title, text, fields = {}) {
 	return file;
 }
 
+// The fields of a tiddler as TiddlyWiki loads the wiki folder (rendered with the json-tiddler template)
+function loadTiddler(folder, title) {
+	const name = "tw-desk-load-tiddler.json";
+	const out = path.join(folder, "output", name);
+	tiddlywiki([folder, "--render", "[[" + title + "]]", "[[" + name + "]]", "text/plain", "$:/core/templates/json-tiddler"]);
+	try {
+		return JSON.parse(fs.readFileSync(out, "utf8"));
+	} finally {
+		fs.rmSync(out, { force: true });
+	}
+}
+
 let emptyHtml = null;
 
 // The HTML of an empty single-file wiki (rendered once per process)
@@ -68,4 +80,4 @@ function wikiHtml(tiddlers, base = emptyWikiHtml()) {
 	return base.slice(0, at) + block + base.slice(at);
 }
 
-module.exports = { TW_DIR, TW_VERSION, tiddlywiki, tempDir, initWiki, writeTiddler, emptyWikiHtml, wikiHtml };
+module.exports = { TW_DIR, TW_VERSION, tiddlywiki, tempDir, initWiki, writeTiddler, loadTiddler, emptyWikiHtml, wikiHtml };

@@ -154,3 +154,235 @@ test("fileNameFor: numbering, empty stems, numbered reuse", () => {
 	assert.deepEqual(binaries.fileNameFor("photo", "image/png", filesDir, sha("c")), { name: "photo (3).png", reuse: false });
 	assert.deepEqual(binaries.fileNameFor("photo", "image/png", filesDir, sha("b")), { name: "photo (2).png", reuse: true });
 });
+
+// applyPolicy
+
+const PNG = Buffer.from(Array.from({ length: 100 }, (_, i) => (i * 7) % 256));
+const read = rel => fs.readFileSync(path.join(dir, rel));
+const exists = rel => fs.existsSync(path.join(dir, rel));
+const tidFields = rel => binaries.parseFields(read(rel).toString("utf8"));
+
+function putPhoto() {
+	put("tiddlers/photo.png", PNG);
+	put("tiddlers/photo.png.meta", "title: Photo\ntype: image/png\ntags: [[a b]]\n");
+}
+
+test("applyPolicy: externalize a binary file with .meta", () => {
+	putPhoto();
+	const result = binaries.applyPolicy(dir, "externalize");
+	assert.deepEqual(result, { done: [{ title: "Photo", action: "externalized", bytes: 100 }], skipped: [], errors: [] });
+	assert.deepEqual(read("files/photo.png"), PNG);
+	assert.equal(exists("tiddlers/photo.png"), false);
+	assert.equal(exists("tiddlers/photo.png.meta"), false);
+	assert.equal(read("tiddlers/photo.png.tid").toString("utf8"),
+		"title: Photo\ntype: image/png\ntags: [[a b]]\n_canonical_uri: files/photo.png\n");
+	assert.deepEqual(fs.readdirSync(path.join(dir, "tiddlers")), ["photo.png.tid"]);
+	assert.deepEqual(fs.readdirSync(path.join(dir, "files")), ["photo.png"]);
+});
+
+test("applyPolicy: externalize a binary file without .meta", () => {
+	put("tiddlers/doc.pdf", PNG);
+	const result = binaries.applyPolicy(dir, "externalize");
+	assert.deepEqual(result.done, [{ title: "doc.pdf", action: "externalized", bytes: 100 }]);
+	assert.deepEqual(tidFields("tiddlers/doc.pdf.tid").fields,
+		{ title: "doc.pdf", type: "application/pdf", _canonical_uri: "files/doc.pdf" });
+	assert.deepEqual(read("files/doc.pdf"), PNG);
+});
+
+test("applyPolicy: externalize base64 in a .tid", () => {
+	const b64 = PNG.toString("base64");
+	put("tiddlers/Img.tid", "title: Img\ntype: image/png\ncreated: 20260101000000000\n\n" + b64.slice(0, 40) + "\n" + b64.slice(40) + "\n");
+	const result = binaries.applyPolicy(dir, "externalize");
+	assert.deepEqual(result.done, [{ title: "Img", action: "externalized", bytes: 100 }]);
+	assert.deepEqual(read("files/Img.png"), PNG);
+	assert.equal(read("tiddlers/Img.tid").toString("utf8"),
+		"title: Img\ntype: image/png\ncreated: 20260101000000000\n_canonical_uri: files/Img.png\n");
+});
+
+test("applyPolicy: externalize refuses invalid base64 and an existing .tid", () => {
+	put("tiddlers/Bad.tid", "title: Bad\ntype: image/png\n\nnot*base64!");
+	put("tiddlers/x.png", PNG);
+	put("tiddlers/x.png.tid", "title: Other\n\nhello");
+	const result = binaries.applyPolicy(dir, "externalize");
+	assert.deepEqual(result.done, []);
+	assert.deepEqual(result.errors.map(e => e.title).sort(), ["Bad", "x.png"]);
+	assert.equal(read("tiddlers/Bad.tid").toString("utf8"), "title: Bad\ntype: image/png\n\nnot*base64!");
+	assert.deepEqual(read("tiddlers/x.png"), PNG);
+	assert.equal(read("tiddlers/x.png.tid").toString("utf8"), "title: Other\n\nhello");
+	assert.deepEqual(fs.existsSync(path.join(dir, "files")) ? fs.readdirSync(path.join(dir, "files")) : [], []);
+});
+
+test("applyPolicy: externalize reuses a file with the same content and avoids clashes", () => {
+	put("files/photo.png", PNG);
+	put("files/other.png", "other");
+	putPhoto();
+	put("tiddlers/other.png", PNG);
+	put("tiddlers/other.png.meta", "title: other\ntype: image/png\n");
+	const result = binaries.applyPolicy(dir, "externalize");
+	assert.equal(result.errors.length, 0);
+	assert.equal(tidFields("tiddlers/photo.png.tid").fields._canonical_uri, "files/photo.png");
+	assert.equal(tidFields("tiddlers/other.png.tid").fields._canonical_uri, "files/other (2).png");
+	assert.equal(read("files/other.png").toString("utf8"), "other");
+	assert.deepEqual(read("files/other (2).png"), PNG);
+});
+
+test("applyPolicy: internalize back", () => {
+	putPhoto();
+	binaries.applyPolicy(dir, "externalize");
+	const result = binaries.applyPolicy(dir, "internalize");
+	assert.deepEqual(result, { done: [{ title: "Photo", action: "internalized", bytes: 100 }], skipped: [], errors: [] });
+	assert.deepEqual(read("tiddlers/photo.png"), PNG);
+	assert.equal(read("tiddlers/photo.png.meta").toString("utf8"), "title: Photo\ntype: image/png\ntags: [[a b]]\n");
+	assert.equal(exists("tiddlers/photo.png.tid"), false);
+	assert.deepEqual(read("files/photo.png"), PNG);
+	assert.deepEqual(fs.readdirSync(path.join(dir, "tiddlers")).sort(), ["photo.png", "photo.png.meta"]);
+});
+
+test("applyPolicy: internalize names the binary after the title when the .tid name doesn't fit", () => {
+	put("tiddlers/Some Image.tid", "title: My: Image\ntype: image/jpeg\n_canonical_uri: files/x.jpg\n");
+	put("files/x.jpg", PNG);
+	const result = binaries.applyPolicy(dir, "internalize");
+	assert.deepEqual(result.done, [{ title: "My: Image", action: "internalized", bytes: 100 }]);
+	assert.deepEqual(read("tiddlers/My_ Image.jpg"), PNG);
+	assert.deepEqual(binaries.parseFields(read("tiddlers/My_ Image.jpg.meta").toString("utf8")).fields,
+		{ title: "My: Image", type: "image/jpeg" });
+	assert.equal(exists("tiddlers/Some Image.tid"), false);
+});
+
+test("applyPolicy: internalize refuses an existing target", () => {
+	put("tiddlers/photo.png.tid", "title: Photo\ntype: image/png\n_canonical_uri: files/photo.png\n");
+	put("files/photo.png", PNG);
+	put("tiddlers/photo.png", "different");
+	const result = binaries.applyPolicy(dir, "internalize");
+	assert.deepEqual(result.done, []);
+	assert.equal(result.errors.length, 1);
+	assert.equal(read("tiddlers/photo.png").toString("utf8"), "different");
+	assert.ok(exists("tiddlers/photo.png.tid"));
+});
+
+test("applyPolicy: internalize and a .meta left without its binary", () => {
+	put("tiddlers/photo.png.tid", "title: Photo\ntype: image/png\n_canonical_uri: files/photo.png\n");
+	put("tiddlers/photo.png.meta", "type: image/png\n\ntitle: Photo");
+	put("files/photo.png", PNG);
+	assert.deepEqual(binaries.applyPolicy(dir, "internalize").done, [{ title: "Photo", action: "internalized", bytes: 100 }]);
+	assert.equal(read("tiddlers/photo.png.meta").toString("utf8"), "title: Photo\ntype: image/png\n");
+	put("tiddlers/q.png.tid", "title: Q\ntype: image/png\n_canonical_uri: files/photo.png\n");
+	put("tiddlers/q.png.meta", "title: Other\n");
+	const result = binaries.applyPolicy(dir, "internalize");
+	assert.deepEqual(result.errors, [{ title: "Q", message: "q.png.meta already exists" }]);
+	assert.equal(read("tiddlers/q.png.meta").toString("utf8"), "title: Other\n");
+	assert.equal(exists("tiddlers/q.png"), false);
+});
+
+test("applyPolicy: internalize skips missing files", () => {
+	const tid = "title: X\ntype: image/png\n_canonical_uri: files/x.png\n";
+	put("tiddlers/x.tid", tid);
+	const result = binaries.applyPolicy(dir, "internalize");
+	assert.deepEqual(result, { done: [], skipped: [{ title: "X", reason: "file not on this machine" }], errors: [] });
+	assert.equal(read("tiddlers/x.tid").toString("utf8"), tid);
+});
+
+test("applyPolicy: internalize leaves files outside files/ alone", () => {
+	put("tiddlers/a.tid", "title: A\ntype: image/png\n_canonical_uri: ../outside.png\n");
+	put("tiddlers/b.tid", "title: B\ntype: image/png\n_canonical_uri: images/b.png\n");
+	put("tiddlers/c.tid", "title: C\ntype: image/png\n_canonical_uri: files/../images/b.png\n");
+	put("images/b.png", PNG);
+	fs.writeFileSync(path.join(path.dirname(dir), path.basename(dir) + "-outside.png"), PNG);
+	try {
+		const result = binaries.applyPolicy(dir, "internalize");
+		assert.deepEqual(result.done, []);
+		assert.deepEqual(result.errors, []);
+		assert.deepEqual(result.skipped.map(s => s.title).sort(), ["A", "B", "C"]);
+		assert.ok(result.skipped.every(s => s.reason === "file is not in the files folder"));
+		assert.deepEqual(fs.readdirSync(path.join(dir, "tiddlers")).sort(), ["a.tid", "b.tid", "c.tid"]);
+	} finally {
+		fs.rmSync(path.join(path.dirname(dir), path.basename(dir) + "-outside.png"), { force: true });
+	}
+});
+
+test("applyPolicy: file names with # and % round trip", () => {
+	put("tiddlers/x.png.tid", "title: C# 100%\ntype: image/png\n\n" + PNG.toString("base64"));
+	binaries.applyPolicy(dir, "externalize");
+	const uri = tidFields("tiddlers/x.png.tid").fields._canonical_uri;
+	assert.equal(uri, "files/C%23 100%25.png");
+	assert.deepEqual(read("files/C# 100%.png"), PNG);
+	const scan = binaries.scanFolder(dir);
+	assert.partialDeepStrictEqual(scan.items[0], { state: "externalized", bytes: 100, missing: false });
+	const result = binaries.applyPolicy(dir, "internalize");
+	assert.deepEqual(result.done, [{ title: "C# 100%", action: "internalized", bytes: 100 }]);
+	assert.deepEqual(read("tiddlers/x.png"), PNG);
+	assert.equal(binaries.parseFields(read("tiddlers/x.png.meta").toString("utf8")).fields.title, "C# 100%");
+});
+
+test("applyPolicy: recovers a half-done externalize and internalize", () => {
+	for (const policy of ["externalize", "internalize"]) {
+		fs.rmSync(path.join(dir, "tiddlers"), { recursive: true, force: true });
+		putPhoto();
+		put("tiddlers/photo.png.tid", "title: Photo\ntype: image/png\ntags: [[a b]]\n_canonical_uri: files/photo.png\n");
+		put("files/photo.png", PNG);
+		put("tiddlers/photo.png.tid.tw-desk-tmp", "leftover");
+		const result = binaries.applyPolicy(dir, policy);
+		assert.deepEqual(result, { done: [{ title: "Photo", action: "recovered", bytes: 100 }], skipped: [], errors: [] });
+		const left = fs.readdirSync(path.join(dir, "tiddlers")).sort();
+		assert.deepEqual(left, policy === "externalize" ? ["photo.png.tid"] : ["photo.png", "photo.png.meta"]);
+		assert.deepEqual(read("files/photo.png"), PNG);
+	}
+});
+
+test("applyPolicy: two tiddler files with different content are left alone", () => {
+	for (const policy of ["externalize", "internalize"]) {
+		putPhoto();
+		put("tiddlers/photo.png.tid", "title: Photo\ntype: image/png\ntags: [[a b]]\n_canonical_uri: files/photo.png\n");
+		put("files/photo.png", "different");
+		const result = binaries.applyPolicy(dir, policy);
+		assert.deepEqual(result.done, []);
+		assert.equal(result.errors.length, 1);
+		assert.equal(result.errors[0].title, "Photo");
+		assert.ok(result.errors[0].message.includes("two tiddler files"));
+		assert.deepEqual(fs.readdirSync(path.join(dir, "tiddlers")).sort(), ["photo.png", "photo.png.meta", "photo.png.tid"]);
+		assert.equal(read("files/photo.png").toString("utf8"), "different");
+	}
+});
+
+test("applyPolicy: same content but different fields is not recovered", () => {
+	putPhoto();
+	put("tiddlers/photo.png.tid", "title: Photo\ntype: image/png\ntags: other\n_canonical_uri: files/photo.png\n");
+	put("files/photo.png", PNG);
+	const result = binaries.applyPolicy(dir, "externalize");
+	assert.ok(result.errors[0].message.includes("two tiddler files"));
+	assert.deepEqual(fs.readdirSync(path.join(dir, "tiddlers")).sort(), ["photo.png", "photo.png.meta", "photo.png.tid"]);
+});
+
+test("applyPolicy: system tiddlers and unsafe fields are skipped", () => {
+	put("tiddlers/$__favicon.ico", PNG);
+	put("tiddlers/$__favicon.ico.meta", "title: $:/favicon.ico\ntype: image/x-icon\n");
+	put("tiddlers/u.png", PNG);
+	// A value TiddlyWiki would save as JSON (a tab inside; " y" can't be expressed in a .meta at all)
+	put("tiddlers/u.png.meta", "title: U\ntype: image/png\nx: a\tb\n");
+	put("tiddlers/v.tid", "title: V\ntype: image/png\n_canonical_uri: files/v.png\nbad#name: 1\n");
+	put("files/v.png", PNG);
+	for (const policy of ["externalize", "internalize"]) {
+		const result = binaries.applyPolicy(dir, policy);
+		assert.deepEqual(result.done, []);
+		assert.deepEqual(result.errors, []);
+		assert.deepEqual(result.skipped, [{ title: policy === "externalize" ? "U" : "V", reason: "fields can't be written to a .tid/.meta file" }]);
+	}
+	assert.deepEqual(fs.readdirSync(path.join(dir, "tiddlers")).sort(),
+		["$__favicon.ico", "$__favicon.ico.meta", "u.png", "u.png.meta", "v.tid"]);
+});
+
+test("applyPolicy: TiddlyWiki loads the same fields after externalize and internalize", () => {
+	const wiki = tw.initWiki(path.join(dir, "wiki"));
+	fs.writeFileSync(path.join(wiki, "tiddlers", "photo.png"), PNG);
+	fs.writeFileSync(path.join(wiki, "tiddlers", "photo.png.meta"),
+		"title: Photo\ntype: image/png\ntags: [[a b]] c\ncreated: 20260101000000000\nmodified: 20260102000000000\ncaption: Cap\ncustom: x\n");
+	const before = tw.loadTiddler(wiki, "Photo");
+	assert.equal(before.text, PNG.toString("base64"));
+	assert.deepEqual(binaries.applyPolicy(wiki, "externalize").errors, []);
+	const external = tw.loadTiddler(wiki, "Photo");
+	const { text, ...rest } = before;
+	assert.deepEqual(external, Object.assign({}, rest, { _canonical_uri: "files/photo.png" }));
+	assert.equal(external.text, undefined);
+	assert.deepEqual(binaries.applyPolicy(wiki, "internalize").errors, []);
+	assert.deepEqual(tw.loadTiddler(wiki, "Photo"), before);
+});

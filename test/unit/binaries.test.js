@@ -129,6 +129,27 @@ test("fileNameFor: unsafe and long titles", () => {
 	assert.equal(name("photo.PNG", "image/png"), "photo.png");
 });
 
+test("fileNameFor: keeps a registered secondary extension", () => {
+	const filesDir = path.join(dir, "files");
+	const name = (title, type) => binaries.fileNameFor(title, type, filesDir, sha("x")).name;
+	assert.equal(name("photo.jpeg", "image/jpeg"), "photo.jpeg");
+	assert.equal(name("Photo.JPEG", "image/jpeg"), "Photo.jpeg");
+	assert.equal(name("song.m4a", "audio/mp4"), "song.m4a");
+	assert.equal(name("photo.m4a", "image/jpeg"), "photo.m4a.jpg");
+});
+
+test("removeTempFiles: removes leftovers in tiddlers/ and files/", () => {
+	put("tiddlers/a.png.tw-desk-tmp", "x");
+	put("tiddlers/sub/b.tid.tw-desk-tmp", "x");
+	put("tiddlers/keep.tid", "title: keep\n\nx");
+	put("files/c.png.tw-desk-tmp", "x");
+	put("files/c.png", "x");
+	binaries.removeTempFiles(dir);
+	assert.deepEqual(fs.readdirSync(path.join(dir, "tiddlers")).sort(), ["keep.tid", "sub"]);
+	assert.deepEqual(fs.readdirSync(path.join(dir, "files")), ["c.png"]);
+	binaries.removeTempFiles(path.join(dir, "nonexistent"));
+});
+
 test("fileNameFor: clash and reuse", () => {
 	const filesDir = path.join(dir, "files");
 	put("files/photo.png", "old");
@@ -248,6 +269,27 @@ test("applyPolicy: internalize back", () => {
 	assert.equal(exists("tiddlers/photo.png.tid"), false);
 	assert.deepEqual(read("files/photo.png"), PNG);
 	assert.deepEqual(fs.readdirSync(path.join(dir, "tiddlers")).sort(), ["photo.png", "photo.png.meta"]);
+});
+
+test("applyPolicy: internalize refuses files that a symlink leads out of files/", t => {
+	putPhoto();
+	binaries.applyPolicy(dir, "externalize");
+	const outside = tw.tempDir();
+	try {
+		fs.writeFileSync(path.join(outside, "photo.png"), "secret");
+		fs.unlinkSync(path.join(dir, "files/photo.png"));
+		try {
+			fs.symlinkSync(path.join(outside, "photo.png"), path.join(dir, "files/photo.png"));
+		} catch (e) {
+			t.skip("no symlinks here");
+			return;
+		}
+		const result = binaries.applyPolicy(dir, "internalize");
+		assert.deepEqual(result.skipped, [{ title: "Photo", reason: "file is not in the files folder" }]);
+		assert.equal(exists("tiddlers/photo.png.tid"), true);
+	} finally {
+		fs.rmSync(outside, { recursive: true, force: true });
+	}
 });
 
 test("applyPolicy: internalize names the binary after the title when the .tid name doesn't fit", () => {

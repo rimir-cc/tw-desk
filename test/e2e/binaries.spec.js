@@ -83,14 +83,16 @@ test("binaries: keep out of git, internalize, refused while running", async ({ d
 
 	await desk.rowMenu(row, "Edit…");
 	await form.locator("[name=binaryPolicy]").selectOption("internalize");
+	await form.locator("[name=filesInGit]").check();
 	await page.locator("#save-dialog").click();
 	await expect(page.locator("#wiki-dialog")).not.toBeVisible();
 	await desk.rowMenu(row, "Apply binary policy now");
 	await expect.poll(() => exists(alpha, "tiddlers", "photo.png")).toBe(true);
 	expect(exists(alpha, "tiddlers", "photo.png.meta")).toBe(true);
 	expect(exists(alpha, "tiddlers", "photo.png.tid")).toBe(false);
-	// The file in files/ stays
+	// The file in files/ stays, and files/ is committed again
 	expect(exists(alpha, "files", "photo.png")).toBe(true);
+	expect(gitignore(alpha).split(/\r?\n/)).not.toContain("files/");
 });
 
 test("binaries: an included wiki is only reported", async ({ desk }) => {

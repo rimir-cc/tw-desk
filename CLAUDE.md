@@ -139,7 +139,7 @@ Windows, done by the user.
   reported. Moves are crash-safe (write, verify size + sha256, then rewrite); all fields except `text` stay identical
   (`modified` not bumped); `$:/` tiddlers untouched. Externalized = `.tid` with `_canonical_uri: files/<name>`, empty text;
   `<name>` is the binary's own file name (lower-case extension, numbered on clashes). Binaries without `.meta` are never moved.
-  Internalize keeps the file in `files/`. `filesInGit: false` appends `files/` to `.gitignore` (never `git rm --cached`).
+  Internalize keeps the file in `files/`. `filesInGit: false` appends `files/` to `.gitignore` (never `git rm --cached`). `filesInGit: true` removes that line again (`ensureNotIgnored`) when the policy runs. A title's own registered extension (`.jpeg`, `.m4a`) is kept. Internalize refuses files a symlink leads out of `files/`. Leftover `*.tw-desk-tmp` files are removed before every server start.
 - `TW_DESK_USER_DATA` env var overrides the user data folder (config, store, backup) – used for testing.
 
 ## Testing

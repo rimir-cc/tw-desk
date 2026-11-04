@@ -46,6 +46,7 @@ const BASE64_TABLE = [
 ];
 
 const BASE64_TYPES = new Set(BASE64_TABLE.map(([type]) => type));
+const TYPE_EXTENSIONS = new Map(BASE64_TABLE);
 const EXTENSION_OF = new Map(BASE64_TABLE.map(([type, exts]) => [type, exts[0]]));
 // As in TW, a later registration of the same extension wins
 const TYPE_OF = new Map();
@@ -271,7 +272,12 @@ function fileNameFor(title, type, filesDir, sha256) {
 // A Windows-safe file name for a title, with the extension of the type
 function safeName(title, type) {
 	// Always the lower-case extension: TW's /files/ route looks up the content type case-sensitively
-	const ext = extensionFor(type);
+	let ext = extensionFor(type);
+	// Keep a registered secondary extension of the type (photo.jpeg, song.m4a) instead of adding the first one
+	const own = path.extname(String(title)).toLowerCase();
+	if (own && own !== ext && (TYPE_EXTENSIONS.get(type) || []).includes(own)) {
+		ext = own;
+	}
 	let stem = String(title).replace(/[<>:"/\\|?*\x00-\x1f]/g, "_").trim();
 	if (stem.toLowerCase().endsWith(ext)) {
 		stem = stem.slice(0, stem.length - ext.length);
@@ -342,6 +348,17 @@ function filesPath(folder, uri) {
 		return null;
 	}
 	return file;
+}
+
+// Whether a file really lies inside <folder>/files: a symlink (the file or a folder above it) must not lead out
+function confinedToFiles(folder, file) {
+	try {
+		const real = fs.realpathSync(file);
+		const rel = path.relative(fs.realpathSync(path.join(folder, "files")), real);
+		return !!rel && rel !== ".." && !rel.startsWith(".." + path.sep) && !path.isAbsolute(rel);
+	} catch (e) {
+		return false;
+	}
 }
 
 // The _canonical_uri for a file name in files/ (# and % would break the URL)
@@ -440,6 +457,9 @@ function internalize(folder, item) {
 	if (!fs.existsSync(source) || !fs.statSync(source).isFile()) {
 		throw new Skip("file not on this machine");
 	}
+	if (!confinedToFiles(folder, source)) {
+		throw new Skip("file is not in the files folder");
+	}
 	if (body.trim() !== "") {
 		throw new Skip("the .tid has text as well as _canonical_uri");
 	}
@@ -501,7 +521,7 @@ function recover(folder, policy, items) {
 }
 
 // Removes temp files an interrupted run left behind (nothing refers to them)
-function removeTempFiles(dir, recursive) {
+function removeTempIn(dir, recursive) {
 	let entries;
 	try {
 		entries = fs.readdirSync(dir, { withFileTypes: true });
@@ -511,11 +531,21 @@ function removeTempFiles(dir, recursive) {
 	for (const entry of entries) {
 		const full = path.join(dir, entry.name);
 		if (entry.isFile() && entry.name.endsWith(TMP)) {
-			fs.rmSync(full, { force: true });
+			try {
+				fs.rmSync(full, { force: true });
+			} catch (e) {
+				console.error("Could not remove " + full + ": " + e.message);
+			}
 		} else if (recursive && entry.isDirectory()) {
-			removeTempFiles(full, true);
+			removeTempIn(full, true);
 		}
 	}
+}
+
+// For a wiki folder, before its server starts: TiddlyWiki would load leftover temp files as tiddlers. Never throws.
+function removeTempFiles(folder) {
+	removeTempIn(path.join(folder, "tiddlers"), true);
+	removeTempIn(path.join(folder, "files"), false);
 }
 
 // Externalizes or internalizes the binary tiddlers in <folder>/tiddlers; problems with one tiddler
@@ -525,8 +555,7 @@ function applyPolicy(folder, policy) {
 		throw new Error("Unknown policy: " + policy);
 	}
 	const result = { done: [], skipped: [], errors: [] };
-	removeTempFiles(path.join(folder, "tiddlers"), true);
-	removeTempFiles(path.join(folder, "files"), false);
+	removeTempFiles(folder);
 	const byTitle = new Map();
 	for (const item of scanFolder(folder).items) {
 		if (item.form === "file" && !item.meta) {
@@ -558,4 +587,4 @@ function applyPolicy(folder, policy) {
 	return result;
 }
 
-module.exports = { BASE64_TYPES, extensionFor, fileNameFor, typeForExtension, parseFields, serializeFields, fieldsSafe, scanFolder, applyPolicy };
+module.exports = { BASE64_TYPES, extensionFor, fileNameFor, typeForExtension, parseFields, serializeFields, fieldsSafe, scanFolder, applyPolicy, removeTempFiles };

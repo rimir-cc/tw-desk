@@ -395,6 +395,7 @@ async function startWiki(id) {
 		saveConfig();
 	}
 	appendLog(id, "Starting TiddlyWiki " + TW_VERSION + ": " + wiki.path + " on port " + port);
+	binaries.removeTempFiles(path.resolve(wiki.path));
 	const extra = linkSettings().plugin ? ["++" + LINK_PLUGIN] : [];
 	const child = runTiddlyWiki(extra.concat([wiki.path, "--listen", "host=127.0.0.1", "port=" + port]), "TiddlyWiki " + wiki.name);
 	state.child = child;
@@ -828,7 +829,13 @@ function formatBytes(bytes) {
 		value /= 1024;
 		unit++;
 	}
-	return (value < 10 ? value.toFixed(1) : Math.round(value)) + " " + units[unit];
+	const text = v => (v < 10 ? v.toFixed(1).replace(/\.0$/, "") : String(Math.round(v)));
+	// 1023.6 KB rounds to 1024: show 1 MB
+	while (Number(text(value)) >= 1024 && unit < units.length - 1) {
+		value /= 1024;
+		unit++;
+	}
+	return text(value) + " " + units[unit];
 }
 
 function scanWikiBinaries(wiki) {
@@ -933,6 +940,15 @@ function applyBinaryPolicy(wiki) {
 			binaryLog(current.id, "Binary policy not applied: included by " + blockers.join(", "));
 			return null;
 		}
+		if (settings.filesInGit) {
+			try {
+				if (git.ensureNotIgnored(path.resolve(current.path), "files/")) {
+					binaryLog(current.id, "Removed files/ from .gitignore – files/ is committed with the wiki again");
+				}
+			} catch (e) {
+				binaryLog(current.id, "Could not remove files/ from .gitignore: " + e.message);
+			}
+		}
 		if (settings.policy === "externalize" && !settings.filesInGit) {
 			try {
 				if (git.ensureIgnored(path.resolve(current.path), "files/")) {
@@ -948,7 +964,7 @@ function applyBinaryPolicy(wiki) {
 			result = binaries.applyPolicy(path.resolve(current.path), settings.policy);
 		} catch (e) {
 			binaryLog(current.id, "Binary policy failed: " + e.message);
-			result = { done: [], skipped: [], errors: [{ title: null, message: e.message }] };
+			result = { done: [], skipped: [], errors: [{ title: "(whole run)", message: e.message }] };
 			scanWikiBinaries(current);
 			binaryScans.get(current.id).lastResult = result;
 			pushState();
@@ -2484,12 +2500,15 @@ async function runImport(base, choices) {
 			wiki.binaries = binarySettingsFrom(null);
 			note += " Its binary policy isn't known here, so binary tiddlers are left as they are.";
 		}
+		if (wiki.binaries.policy !== "leave") {
+			note += " Binary policy: " + wiki.binaries.policy + ".";
+		}
 		if (entry.fixedPort) {
 			const clash = config.wikis.find(w => w.fixedPort === entry.fixedPort);
 			if (validPort(entry.fixedPort) && !clash) {
 				wiki.fixedPort = entry.fixedPort;
 			} else if (clash) {
-				note = " Its fixed port " + entry.fixedPort + " belongs to “" + clash.name + "” here, so it gets an automatic port.";
+				note += " Its fixed port " + entry.fixedPort + " belongs to “" + clash.name + "” here, so it gets an automatic port.";
 			}
 		}
 		const group = groupId(entry.group);

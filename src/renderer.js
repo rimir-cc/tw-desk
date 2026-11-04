@@ -245,7 +245,13 @@ function formatBytes(bytes) {
 		value /= 1024;
 		unit++;
 	}
-	return (value < 10 ? value.toFixed(1).replace(/\.0$/, "") : Math.round(value)) + " " + units[unit];
+	const text = v => (v < 10 ? v.toFixed(1).replace(/\.0$/, "") : String(Math.round(v)));
+	// 1023.6 KB rounds to 1024: show 1 MB
+	while (Number(text(value)) >= 1024 && unit < units.length - 1) {
+		value /= 1024;
+		unit++;
+	}
+	return text(value) + " " + units[unit];
 }
 
 const BINARY_POLICY_TEXT = { leave: "leave as is", externalize: "externalize into files/", internalize: "internalize from files/" };

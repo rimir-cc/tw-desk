@@ -210,6 +210,30 @@ function ensureIgnored(folder, line) {
 	return true;
 }
 
+// Removes exactly that line from a folder's .gitignore, keeping the rest. Returns false if it isn't there.
+function ensureNotIgnored(folder, line) {
+	const ignoreFile = path.join(folder, ".gitignore");
+	if (!fs.existsSync(ignoreFile)) {
+		return false;
+	}
+	const parts = fs.readFileSync(ignoreFile, "utf8").split(/(\r?\n)/);
+	// parts alternate: line, separator, line, ...
+	const kept = [];
+	let removed = false;
+	for (let i = 0; i < parts.length; i += 2) {
+		if (parts[i] === line) {
+			removed = true;
+			continue;
+		}
+		kept.push(parts[i], parts[i + 1] === undefined ? "" : parts[i + 1]);
+	}
+	if (!removed) {
+		return false;
+	}
+	fs.writeFileSync(ignoreFile, kept.join(""));
+	return true;
+}
+
 async function addRemote(root, url) {
 	const trimmed = (url || "").trim();
 	if (!trimmed) {
@@ -231,4 +255,4 @@ async function clone(url, target, branch) {
 	await git(path.dirname(target), args.concat("--", url, target), 600000);
 }
 
-module.exports = { version, repoRoot, status, fetch, commit, push, pull, init, ensureIgnored, addRemote, clone };
+module.exports = { version, repoRoot, status, fetch, commit, push, pull, init, ensureIgnored, ensureNotIgnored, addRemote, clone };

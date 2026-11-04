@@ -170,6 +170,19 @@ test("ensureIgnored: appends once", () => {
 	assert.equal(fs.readFileSync(file, "utf8"), "output/\nfiles/\n");
 });
 
+test("ensureNotIgnored: removes exactly that line and keeps the rest", () => {
+	const wiki = folder("not-ignored");
+	const file = path.join(wiki, ".gitignore");
+	assert.equal(git.ensureNotIgnored(wiki, "files/"), false);
+	fs.writeFileSync(file, "output/\r\nfiles/\r\nmyfiles/\r\n!files/x");
+	assert.equal(git.ensureNotIgnored(wiki, "files/"), true);
+	assert.equal(fs.readFileSync(file, "utf8"), "output/\r\nmyfiles/\r\n!files/x");
+	assert.equal(git.ensureNotIgnored(wiki, "files/"), false);
+	fs.writeFileSync(file, "a\nfiles/");
+	assert.equal(git.ensureNotIgnored(wiki, "files/"), true);
+	assert.equal(fs.readFileSync(file, "utf8"), "a\n");
+});
+
 test("ensureIgnored: files/ stays out of git status", { skip }, async () => {
 	const wiki = folder("ignore-git");
 	await git.init(wiki);

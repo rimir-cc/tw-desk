@@ -144,10 +144,31 @@ test("removeTempFiles: removes leftovers in tiddlers/ and files/", () => {
 	put("tiddlers/keep.tid", "title: keep\n\nx");
 	put("files/c.png.tw-desk-tmp", "x");
 	put("files/c.png", "x");
+	put("files/sub/x.pdf.tw-desk-tmp", "x");
+	put("files/sub/x.pdf", "x");
 	binaries.removeTempFiles(dir);
 	assert.deepEqual(fs.readdirSync(path.join(dir, "tiddlers")).sort(), ["keep.tid", "sub"]);
-	assert.deepEqual(fs.readdirSync(path.join(dir, "files")), ["c.png"]);
+	assert.deepEqual(fs.readdirSync(path.join(dir, "files")).sort(), ["c.png", "sub"]);
+	assert.deepEqual(fs.readdirSync(path.join(dir, "files", "sub")), ["x.pdf"]);
 	binaries.removeTempFiles(path.join(dir, "nonexistent"));
+});
+
+test("removeTempFiles: doesn't follow a symlinked folder in files/", t => {
+	const outside = tw.tempDir();
+	try {
+		fs.writeFileSync(path.join(outside, "y.pdf.tw-desk-tmp"), "x");
+		fs.mkdirSync(path.join(dir, "files"));
+		try {
+			fs.symlinkSync(outside, path.join(dir, "files", "link"), "dir");
+		} catch (e) {
+			t.skip("no symlinks here");
+			return;
+		}
+		binaries.removeTempFiles(dir);
+		assert.ok(fs.existsSync(path.join(outside, "y.pdf.tw-desk-tmp")));
+	} finally {
+		fs.rmSync(outside, { recursive: true, force: true });
+	}
 });
 
 test("fileNameFor: clash and reuse", () => {
@@ -182,6 +203,8 @@ const PNG = Buffer.from(Array.from({ length: 100 }, (_, i) => (i * 7) % 256));
 const read = rel => fs.readFileSync(path.join(dir, rel));
 const exists = rel => fs.existsSync(path.join(dir, rel));
 const tidFields = rel => binaries.parseFields(read(rel).toString("utf8"));
+// The part 1 fields of an applyPolicy result
+const core = ({ done, skipped, errors }) => ({ done, skipped, errors });
 
 function putPhoto() {
 	put("tiddlers/photo.png", PNG);
@@ -191,7 +214,7 @@ function putPhoto() {
 test("applyPolicy: externalize a binary file with .meta", () => {
 	putPhoto();
 	const result = binaries.applyPolicy(dir, "externalize");
-	assert.deepEqual(result, { done: [{ title: "Photo", action: "externalized", bytes: 100 }], skipped: [], errors: [] });
+	assert.deepEqual(core(result), { done: [{ title: "Photo", action: "externalized", bytes: 100 }], skipped: [], errors: [] });
 	assert.deepEqual(read("files/photo.png"), PNG);
 	assert.equal(exists("tiddlers/photo.png"), false);
 	assert.equal(exists("tiddlers/photo.png.meta"), false);
@@ -204,11 +227,11 @@ test("applyPolicy: externalize a binary file with .meta", () => {
 test("applyPolicy: a binary file without .meta is skipped", () => {
 	put("tiddlers/doc.pdf", PNG);
 	const result = binaries.applyPolicy(dir, "externalize");
-	assert.deepEqual(result, { done: [], skipped: [{ title: "doc.pdf", reason: "no .meta file – TiddlyWiki titles it with its full path" }], errors: [] });
+	assert.deepEqual(core(result), { done: [], skipped: [{ title: "doc.pdf", reason: "no .meta file – TiddlyWiki titles it with its full path" }], errors: [] });
 	assert.deepEqual(read("tiddlers/doc.pdf"), PNG);
 	assert.deepEqual(fs.readdirSync(path.join(dir, "tiddlers")), ["doc.pdf"]);
 	assert.equal(exists("files"), false);
-	assert.deepEqual(binaries.applyPolicy(dir, "internalize"), { done: [], skipped: [], errors: [] });
+	assert.deepEqual(core(binaries.applyPolicy(dir, "internalize")), { done: [], skipped: [], errors: [] });
 });
 
 test("applyPolicy: externalize lower-cases the extension in files/", () => {
@@ -263,7 +286,7 @@ test("applyPolicy: internalize back", () => {
 	putPhoto();
 	binaries.applyPolicy(dir, "externalize");
 	const result = binaries.applyPolicy(dir, "internalize");
-	assert.deepEqual(result, { done: [{ title: "Photo", action: "internalized", bytes: 100 }], skipped: [], errors: [] });
+	assert.deepEqual(core(result), { done: [{ title: "Photo", action: "internalized", bytes: 100 }], skipped: [], errors: [] });
 	assert.deepEqual(read("tiddlers/photo.png"), PNG);
 	assert.equal(read("tiddlers/photo.png.meta").toString("utf8"), "title: Photo\ntype: image/png\ntags: [[a b]]\n");
 	assert.equal(exists("tiddlers/photo.png.tid"), false);
@@ -332,7 +355,7 @@ test("applyPolicy: internalize skips missing files", () => {
 	const tid = "title: X\ntype: image/png\n_canonical_uri: files/x.png\n";
 	put("tiddlers/x.tid", tid);
 	const result = binaries.applyPolicy(dir, "internalize");
-	assert.deepEqual(result, { done: [], skipped: [{ title: "X", reason: "file not on this machine" }], errors: [] });
+	assert.deepEqual(core(result), { done: [], skipped: [{ title: "X", reason: "file not on this machine" }], errors: [] });
 	assert.equal(read("tiddlers/x.tid").toString("utf8"), tid);
 });
 
@@ -376,7 +399,7 @@ test("applyPolicy: recovers a half-done externalize and internalize", () => {
 		put("files/photo.png", PNG);
 		put("tiddlers/photo.png.tid.tw-desk-tmp", "leftover");
 		const result = binaries.applyPolicy(dir, policy);
-		assert.deepEqual(result, { done: [{ title: "Photo", action: "recovered", bytes: 100 }], skipped: [], errors: [] });
+		assert.deepEqual(core(result), { done: [{ title: "Photo", action: "recovered", bytes: 100 }], skipped: [], errors: [] });
 		const left = fs.readdirSync(path.join(dir, "tiddlers")).sort();
 		assert.deepEqual(left, policy === "externalize" ? ["photo.png.tid"] : ["photo.png", "photo.png.meta"]);
 		assert.deepEqual(read("files/photo.png"), PNG);
@@ -597,8 +620,9 @@ test("update: odd markers are skipped", () => {
 			put("tiddlers/a.pdf.tid", fields);
 		}
 		const before = fs.readdirSync(path.join(dir, "tiddlers")).sort().map(n => [n, read(path.join("tiddlers", n))]);
-		const result = binaries.applyPolicy(dir, "externalize", { record: ["report.pdf"], backupDir: backupOf() });
-		assert.deepEqual(result, { done: [], skipped: [{ title: "A", reason }], errors: [] }, reason);
+		// confirmDelete: [] – report.pdf loses its only reference in some cases; deleting it isn't the point here
+		const result = binaries.applyPolicy(dir, "externalize", { record: ["report.pdf"], backupDir: backupOf(), confirmDelete: [] });
+		assert.deepEqual(core(result), { done: [], skipped: [{ title: "A", reason }], errors: [] }, reason);
 		assert.deepEqual(fs.readdirSync(path.join(dir, "tiddlers")).sort().map(n => [n, read(path.join("tiddlers", n))]), before);
 		assert.deepEqual(fs.readdirSync(path.join(dir, "files")), ["report.pdf"]);
 		assert.deepEqual(read("files/report.pdf"), OLD);
@@ -610,7 +634,7 @@ test("update: incomplete scan waits", () => {
 	putReportUpdate();
 	put("tiddlers/bundle/tiddlywiki.files", "{}");
 	const result = binaries.applyPolicy(dir, "externalize", { record: ["report.pdf"], backupDir: backupOf() });
-	assert.deepEqual(result, { done: [], skipped: [{ title: "Report", reason: "scan incomplete – update waits" }], errors: [] });
+	assert.deepEqual(core(result), { done: [], skipped: [{ title: "Report", reason: "scan incomplete – update waits" }], errors: [] });
 	assert.deepEqual(read("files/report.pdf"), OLD);
 	assert.ok(exists("tiddlers/report.pdf.meta"));
 	fs.rmSync(path.join(dir, "tiddlers", "bundle"), { recursive: true });
@@ -680,7 +704,7 @@ test("update: recovers a half-done update", () => {
 	put("tiddlers/report.pdf", NEW);
 	put("tiddlers/report.pdf.meta", "title: Report\ntype: application/pdf\ntags: x\n" + M + ": files/report.pdf\n");
 	const result = binaries.applyPolicy(dir, "externalize", { record: ["report.pdf"], backupDir: backupOf() });
-	assert.deepEqual(result, { done: [{ title: "Report", action: "recovered", bytes: NEW.length }], skipped: [], errors: [] });
+	assert.deepEqual(core(result), { done: [{ title: "Report", action: "recovered", bytes: NEW.length }], skipped: [], errors: [] });
 	assert.deepEqual(fs.readdirSync(path.join(dir, "tiddlers")), ["report.pdf.tid"]);
 	assert.deepEqual(read("files/report.pdf"), NEW);
 });
@@ -688,7 +712,7 @@ test("update: recovers a half-done update", () => {
 test("update: internalize ignores the marker", () => {
 	putReportUpdate();
 	const result = binaries.applyPolicy(dir, "internalize", { record: ["report.pdf"], backupDir: backupOf() });
-	assert.deepEqual(result, { done: [], skipped: [], errors: [] });
+	assert.deepEqual(core(result), { done: [], skipped: [], errors: [] });
 	assert.deepEqual(read("files/report.pdf"), OLD);
 	assert.deepEqual(read("tiddlers/report.pdf"), NEW);
 	assert.match(read("tiddlers/report.pdf.meta").toString("utf8"), new RegExp(M));
@@ -727,4 +751,247 @@ test("backupFile: across drives copies, verifies, then deletes", t => {
 	assert.equal(target, path.join(backupOf(), "x.pdf"));
 	assert.deepEqual(fs.readFileSync(target), OLD);
 	assert.equal(exists("files/x.pdf"), false);
+});
+
+test("references: a JSON tiddler without a title", () => {
+	put("tiddlers/c.json", JSON.stringify([{ type: "image/png", _canonical_uri: "files/c.png" }]));
+	const scan = binaries.scanFolder(dir);
+	assert.deepEqual([...scan.references.values()], [{ name: "c.png", titles: [""] }]);
+});
+
+test("references: a symlink in tiddlers/ makes the scan incomplete", t => {
+	const outside = tw.tempDir();
+	try {
+		fs.writeFileSync(path.join(outside, "a.tid"), "title: A\n_canonical_uri: files/a.png\n\n");
+		put("tiddlers/ok.tid", "title: ok\n\n");
+		try {
+			fs.symlinkSync(path.join(outside, "a.tid"), path.join(dir, "tiddlers", "a.tid"));
+		} catch (e) {
+			t.skip("no symlinks here");
+			return;
+		}
+		const scan = binaries.scanFolder(dir);
+		assert.equal(scan.complete, false);
+		assert.match(scan.problems[0], /a\.tid/);
+		fs.unlinkSync(path.join(dir, "tiddlers", "a.tid"));
+		fs.symlinkSync(outside, path.join(dir, "tiddlers", "linked"), "dir");
+		const again = binaries.scanFolder(dir);
+		assert.equal(again.complete, false);
+		assert.match(again.problems[0], /linked/);
+	} finally {
+		fs.rmSync(outside, { recursive: true, force: true });
+	}
+});
+
+// Deletions
+
+// An externalized tiddler pointing to files/<name>
+const putExt = (title, name) => put("tiddlers/" + title + ".tid", "title: " + title + "\ntype: image/png\n_canonical_uri: files/" + name + "\n");
+
+function putAB() {
+	put("files/a.png", "a");
+	put("files/b.png", "b");
+	putExt("a", "a.png");
+}
+
+test("delete: a file whose tiddler was removed", () => {
+	putAB();
+	const result = binaries.applyPolicy(dir, "externalize", { record: ["a.png", "b.png"], backupDir: backupOf() });
+	assert.deepEqual(result.errors, []);
+	assert.deepEqual(result.deleted, [{ name: "b.png", backup: path.join(backupOf(), "b.png") }]);
+	assert.deepEqual(result.pending, []);
+	assert.equal(result.guard, null);
+	assert.equal(result.incomplete, null);
+	assert.equal(exists("files/b.png"), false);
+	assert.equal(fs.readFileSync(path.join(backupOf(), "b.png"), "utf8"), "b");
+	assert.equal(exists("files/a.png"), true);
+	assert.deepEqual(result.record, ["a.png"]);
+});
+
+test("delete: git has it → unlinked without backup", () => {
+	putAB();
+	const result = binaries.applyPolicy(dir, "externalize", { record: ["a.png", "b.png"], backupDir: backupOf(), gitHas: new Set(["b.png"]) });
+	assert.deepEqual(result.deleted, [{ name: "b.png", backup: null }]);
+	assert.equal(exists("files/b.png"), false);
+	assert.equal(fs.existsSync(backupOf()), false);
+});
+
+test("delete: without a backup folder the file stays pending", () => {
+	putAB();
+	const result = binaries.applyPolicy(dir, "externalize", { record: ["a.png", "b.png"] });
+	assert.deepEqual(result.deleted, []);
+	assert.deepEqual(result.pending, ["b.png"]);
+	assert.equal(result.errors.length, 1);
+	assert.equal(result.errors[0].title, "files/b.png");
+	assert.equal(exists("files/b.png"), true);
+	assert.deepEqual(result.record, ["a.png", "b.png"]);
+});
+
+test("delete: never-used files stay", () => {
+	putAB();
+	put("files/hand.png", "h");
+	const result = binaries.applyPolicy(dir, "externalize", { record: ["a.png", "b.png"], backupDir: backupOf() });
+	assert.deepEqual(result.deleted.map(d => d.name), ["b.png"]);
+	assert.equal(exists("files/hand.png"), true);
+	assert.deepEqual(result.record, ["a.png"]);
+});
+
+test("delete: first run only records", () => {
+	putAB();
+	putExt("c", "sub/c.png");
+	for (const options of [{ backupDir: backupOf() }, undefined]) {
+		const result = binaries.applyPolicy(dir, "externalize", options);
+		assert.deepEqual(result.deleted, []);
+		assert.deepEqual(result.pending, []);
+		assert.equal(result.guard, null);
+		assert.deepEqual(result.record, ["a.png", "sub/c.png"]);
+		assert.equal(exists("files/b.png"), true);
+	}
+});
+
+test("delete: outside references protect but aren't recorded", () => {
+	putAB();
+	const outside = { references: new Map([["b.png", { name: "b.png", titles: ["Elsewhere"] }]]), complete: true, problems: [] };
+	const result = binaries.applyPolicy(dir, "externalize", { record: ["a.png", "b.png"], backupDir: backupOf(), outside, caseInsensitive: false });
+	assert.deepEqual(result.deleted, []);
+	assert.equal(exists("files/b.png"), true);
+	assert.deepEqual(result.record, ["a.png"]);
+});
+
+test("delete: incomplete scan deletes nothing", () => {
+	putAB();
+	put("tiddlers/bundle/tiddlywiki.files", "{}");
+	putExt("c", "c.png");
+	const result = binaries.applyPolicy(dir, "externalize", { record: ["a.png", "b.png", "gone.png"], backupDir: backupOf() });
+	assert.deepEqual(result.deleted, []);
+	assert.deepEqual(result.pending, []);
+	assert.match(result.incomplete, /tiddlywiki\.files/);
+	assert.equal(exists("files/b.png"), true);
+	assert.deepEqual(result.record, ["a.png", "b.png", "c.png", "gone.png"]);
+	fs.rmSync(path.join(dir, "tiddlers", "bundle"), { recursive: true });
+	const outside = { references: new Map(), complete: false, problems: ["outside problem"] };
+	const again = binaries.applyPolicy(dir, "externalize", { record: ["a.png", "b.png"], backupDir: backupOf(), outside });
+	assert.equal(again.incomplete, "outside problem");
+	assert.deepEqual(again.deleted, []);
+	assert.equal(exists("files/b.png"), true);
+});
+
+test("delete: guard – more than 10", () => {
+	const names = Array.from({ length: 11 }, (_, i) => "f" + String(i).padStart(2, "0") + ".png");
+	const setup = () => {
+		for (const name of names) {
+			put("files/" + name, name);
+		}
+		put("files/kept.png", "k");
+		putExt("kept", "kept.png");
+	};
+	setup();
+	const record = names.concat("kept.png");
+	let result = binaries.applyPolicy(dir, "externalize", { record, backupDir: backupOf() });
+	assert.deepEqual(result.guard, { reason: "many", count: 11 });
+	assert.deepEqual(result.pending, names);
+	assert.deepEqual(result.deleted, []);
+	assert.equal(fs.readdirSync(path.join(dir, "files")).length, 12);
+	assert.deepEqual(result.record, record.slice().sort());
+	result = binaries.applyPolicy(dir, "externalize", { record, backupDir: backupOf(), confirmDelete: ["f03.png", "f07.png", "unknown.png"] });
+	assert.equal(result.guard, null);
+	assert.deepEqual(result.deleted.map(d => d.name), ["f03.png", "f07.png"]);
+	assert.equal(result.pending.length, 9);
+	assert.equal(exists("files/f03.png"), false);
+	assert.equal(exists("files/f04.png"), true);
+	assert.deepEqual(result.record, record.filter(n => n !== "f03.png" && n !== "f07.png").sort());
+});
+
+test("delete: guard – every file in use", () => {
+	for (const name of ["a.png", "b.png", "c.png"]) {
+		put("files/" + name, name);
+	}
+	put("tiddlers/other.tid", "title: other\n\n");
+	let result = binaries.applyPolicy(dir, "externalize", { record: ["a.png", "b.png", "c.png"], backupDir: backupOf() });
+	assert.deepEqual(result.guard, { reason: "all", count: 3 });
+	assert.deepEqual(result.pending, ["a.png", "b.png", "c.png"]);
+	assert.deepEqual(result.deleted, []);
+	assert.deepEqual(result.record, ["a.png", "b.png", "c.png"]);
+	// A missing entry doesn't hide that every existing file lost its tiddler
+	result = binaries.applyPolicy(dir, "externalize", { record: ["a.png", "b.png", "c.png", "gone.png"], backupDir: backupOf() });
+	assert.deepEqual(result.guard, { reason: "all", count: 3 });
+	// R1: two files are deleted without asking
+	fs.rmSync(path.join(dir, "files", "c.png"));
+	result = binaries.applyPolicy(dir, "externalize", { record: ["a.png", "b.png"], backupDir: backupOf() });
+	assert.equal(result.guard, null);
+	assert.deepEqual(result.deleted.map(d => d.name), ["a.png", "b.png"]);
+	assert.deepEqual(result.record, []);
+});
+
+test("delete: missing, directory and symlink entries are left alone", t => {
+	putAB();
+	fs.mkdirSync(path.join(dir, "files", "folder.png"));
+	put("files/folder.png/inner.png", "i");
+	let symlink = true;
+	try {
+		fs.symlinkSync(path.join(dir, "files", "a.png"), path.join(dir, "files", "link.png"));
+	} catch (e) {
+		symlink = false;
+	}
+	const record = ["a.png", "b.png", "missing.png", "folder.png"].concat(symlink ? ["link.png"] : []);
+	const result = binaries.applyPolicy(dir, "externalize", { record, backupDir: backupOf() });
+	assert.deepEqual(result.errors, []);
+	assert.equal(result.guard, null);
+	assert.deepEqual(result.deleted.map(d => d.name), ["b.png"]);
+	assert.deepEqual(result.pending, []);
+	assert.ok(fs.statSync(path.join(dir, "files", "folder.png")).isDirectory());
+	assert.equal(exists("files/folder.png/inner.png"), true);
+	assert.deepEqual(result.record, ["a.png"]);
+	if (!symlink) {
+		t.skip("no symlinks here");
+		return;
+	}
+	assert.ok(fs.lstatSync(path.join(dir, "files", "link.png")).isSymbolicLink());
+});
+
+test("delete: name matching follows the platform's case rule", () => {
+	const setup = () => {
+		put("files/photo.png", "p");
+		put("tiddlers/p.tid", "title: P\ntype: image/png\n_canonical_uri: files/Photo.PNG\n");
+	};
+	setup();
+	let result = binaries.applyPolicy(dir, "externalize", { record: ["photo.png"], backupDir: backupOf(), caseInsensitive: true });
+	assert.deepEqual(result.deleted, []);
+	assert.equal(exists("files/photo.png"), true);
+	assert.deepEqual(result.record, ["Photo.PNG"]);
+	result = binaries.applyPolicy(dir, "externalize", { record: ["photo.png"], backupDir: backupOf(), caseInsensitive: false });
+	assert.deepEqual(result.deleted.map(d => d.name), ["photo.png"]);
+	assert.deepEqual(result.record, ["Photo.PNG"]);
+});
+
+test("delete: record entries are deduplicated by key", () => {
+	putAB();
+	const result = binaries.applyPolicy(dir, "externalize", { record: ["A.png", "b.png", "B.PNG", "../x.png", 7], backupDir: backupOf(), caseInsensitive: true });
+	assert.deepEqual(result.deleted.map(d => d.name), ["b.png"]);
+	assert.deepEqual(result.record, ["a.png"]);
+});
+
+test("delete: an updated file's old extension goes", () => {
+	put("files/pic.png", OLD);
+	put("tiddlers/pic.jpg", NEW);
+	put("tiddlers/pic.jpg.meta", "title: Pic\ntype: image/jpeg\n" + M + ": files/pic.png\n");
+	const result = binaries.applyPolicy(dir, "externalize", { record: ["pic.png"], backupDir: backupOf() });
+	assert.deepEqual(result.errors, []);
+	assert.partialDeepStrictEqual(result.done[0], { action: "updated", name: "pic.jpg" });
+	assert.deepEqual(result.deleted, [{ name: "pic.png", backup: path.join(backupOf(), "pic.png") }]);
+	assert.equal(exists("files/pic.png"), false);
+	assert.deepEqual(read("files/pic.jpg"), NEW);
+	assert.deepEqual(result.record, ["pic.jpg"]);
+});
+
+test("delete: internalize never deletes", () => {
+	putAB();
+	const result = binaries.applyPolicy(dir, "internalize", { record: ["a.png", "b.png"], backupDir: backupOf() });
+	assert.deepEqual(result.deleted, []);
+	assert.deepEqual(result.pending, []);
+	assert.equal(result.guard, null);
+	assert.equal(result.incomplete, null);
+	assert.equal(result.record, null);
+	assert.equal(exists("files/b.png"), true);
+	assert.equal(exists("files/a.png"), true);
 });

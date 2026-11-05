@@ -311,7 +311,7 @@ function scanFolder(folder, options = {}) {
 				return;
 			}
 			for (const t of tiddlers) {
-				addReferences(t, String(t.title));
+				addReferences(t, t.title === undefined || t.title === null ? "" : String(t.title));
 			}
 			if (jsonHasBinary(tiddlers)) {
 				scan.skipped.push({ file, reason: "json" });
@@ -349,6 +349,11 @@ function scanFolder(folder, options = {}) {
 		}
 		for (const entry of entries.sort((a, b) => (a.name < b.name ? -1 : 1))) {
 			const full = path.join(dir, entry.name);
+			// TiddlyWiki follows symlinks, this walk doesn't: what lies behind them is unknown
+			if (entry.isSymbolicLink() && (entry.name.endsWith(".meta") || !EXCLUDE.test(entry.name))) {
+				problem("Skipped " + full + " (symlink)");
+				continue;
+			}
 			if (entry.isFile() && entry.name.endsWith(".meta")) {
 				scanMeta(full, entry.name);
 			}
@@ -835,7 +840,7 @@ function removeTempIn(dir, recursive) {
 // For a wiki folder, before its server starts: TiddlyWiki would load leftover temp files as tiddlers. Never throws.
 function removeTempFiles(folder) {
 	removeTempIn(path.join(folder, "tiddlers"), true);
-	removeTempIn(path.join(folder, "files"), false);
+	removeTempIn(path.join(folder, "files"), true);
 }
 
 // What a policy run knows besides the items: references to files/ (own tiddlers/ and outside), names written in
@@ -856,7 +861,7 @@ function runContext(scan, options) {
 		caseInsensitive,
 		references,
 		complete: scan.complete && (!outside || outside.complete),
-		record: options.record ? new Set(options.record.map(n => nameKey(n, caseInsensitive))) : null,
+		record: options.record ? new Set(options.record.filter(n => typeof n === "string").map(n => nameKey(n, caseInsensitive))) : null,
 		gitHas: options.gitHas || new Set(),
 		backupDir: options.backupDir || null,
 		// nameKeys written or reused in this run: never overwritten implicitly afterwards
@@ -917,7 +922,91 @@ function applyPolicy(folder, policy, options = {}) {
 		}
 	}
 	// files/ is now as updates and moves left it (run.claimed holds the names they wrote)
+	if (policy === "externalize") {
+		Object.assign(result, deleteUnused(folder, options, run, result.errors));
+	} else {
+		Object.assign(result, { deleted: [], pending: [], guard: null, incomplete: null, record: null });
+	}
 	return result;
+}
+
+// Names deduplicated by nameKey (the first spelling wins), sorted
+function uniqueNames(names, caseInsensitive) {
+	const byKey = new Map();
+	for (const name of names) {
+		const key = nameKey(name, caseInsensitive);
+		if (!byKey.has(key)) {
+			byKey.set(key, name);
+		}
+	}
+	return [...byKey.values()].sort();
+}
+
+// After updates and moves: deletes the files in files/ that were in use at the previous run (options.record) and
+// aren't referenced any more, unless the scan is incomplete or the mass-deletion guard holds them back. Returns
+// { deleted, pending, guard, incomplete, record } with the new record to write; failed deletes go to errors.
+function deleteUnused(folder, options, run, errors) {
+	const caseInsensitive = run.caseInsensitive;
+	const after = scanFolder(folder, { caseInsensitive });
+	const outside = options.outside || null;
+	// Names written in this run count as in use even if writing their tiddler failed
+	const inUse = new Set([...after.references.keys(), ...(outside ? outside.references.keys() : []), ...run.claimed]);
+	// Outside references protect files but are never recorded
+	const referenced = [...after.references.values()].map(r => r.name);
+	const problems = after.problems.concat(outside ? outside.problems : []);
+	const complete = after.complete && (!outside || outside.complete);
+	const out = { deleted: [], pending: [], guard: null, incomplete: complete ? null : problems[0] || "scan incomplete", record: null };
+	if (!options.record) {
+		out.record = uniqueNames(referenced, caseInsensitive);
+		return out;
+	}
+	// Only names that stay inside files/ ("a/../b", absolute paths and non-strings are dropped)
+	const old = uniqueNames(options.record.filter(n => typeof n === "string" && fileNameOfUri(uriFor(n)) === n), caseInsensitive);
+	if (!complete) {
+		out.record = uniqueNames(referenced.concat(old), caseInsensitive);
+		return out;
+	}
+	const filesDir = path.join(folder, "files");
+	// Entries whose file is missing or isn't a regular file in files/ are dropped from the record
+	const present = old.filter(name => regularInFiles(folder, pathIn(filesDir, name)));
+	const candidates = present.filter(name => !inUse.has(nameKey(name, caseInsensitive)));
+	let toDelete = candidates;
+	if (Array.isArray(options.confirmDelete)) {
+		const confirmed = new Set(options.confirmDelete.filter(n => typeof n === "string").map(n => nameKey(n, caseInsensitive)));
+		toDelete = candidates.filter(name => confirmed.has(nameKey(name, caseInsensitive)));
+	} else if (candidates.length > 10) {
+		out.guard = { reason: "many", count: candidates.length };
+	} else if (candidates.length > 0 && candidates.length === present.length && present.length >= 3) {
+		out.guard = { reason: "all", count: candidates.length };
+	}
+	if (out.guard) {
+		toDelete = [];
+	}
+	const deleting = new Set(toDelete);
+	out.pending = candidates.filter(name => !deleting.has(name));
+	for (const name of toDelete) {
+		const file = pathIn(filesDir, name);
+		try {
+			if (!regularInFiles(folder, file)) {
+				throw new Error("files/" + name + " is not a regular file in the files folder");
+			}
+			let backup = null;
+			if (run.gitHas.has(nameKey(name, caseInsensitive))) {
+				fs.unlinkSync(file);
+			} else if (run.backupDir) {
+				backup = backupFile(file, run.backupDir, name);
+			} else {
+				throw new Error("No backup folder to keep files/" + name);
+			}
+			out.deleted.push({ name, backup });
+		} catch (e) {
+			errors.push({ title: "files/" + name, message: e.message });
+			out.pending.push(name);
+		}
+	}
+	out.pending.sort();
+	out.record = uniqueNames(referenced.concat(out.pending), caseInsensitive);
+	return out;
 }
 
 module.exports = { BASE64_TYPES, extensionFor, fileNameFor, typeForExtension, parseFields, serializeFields, fieldsSafe, scanFolder, nameKey, fileNameOfUri, listFiles, MARKER, applyPolicy, backupFile, removeTempFiles };

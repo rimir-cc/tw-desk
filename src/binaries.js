@@ -418,6 +418,10 @@ const TMP = ".tw-desk-tmp";
 const UNSAFE = "fields can't be written to a .tid/.meta file";
 const TWO_FILES = "two tiddler files with this title";
 const NO_META = "no .meta file – TiddlyWiki titles it with its full path";
+const MARKER_AND_URI = "update marker and _canonical_uri together";
+const MARKER_EMPTY = "update marker without new content";
+const MARKER_OUTSIDE = "update marker outside files/";
+const SCAN_WAITS = "scan incomplete – update waits";
 
 class Skip extends Error {}
 
@@ -497,6 +501,9 @@ function loadEmbedded(item) {
 		return { fields, bytes: decodeBase64(body) };
 	}
 	const fields = item.meta ? parseMeta(fs.readFileSync(item.meta, "utf8")) : {};
+	if (MARKER in fields && "_canonical_uri" in fields) {
+		throw new Skip(MARKER_AND_URI);
+	}
 	if ("text" in fields || "_canonical_uri" in fields) {
 		throw new Skip("the .meta file has a text or _canonical_uri field");
 	}
@@ -528,9 +535,170 @@ function deleteEmbedded(item) {
 	}
 }
 
-function externalize(folder, item) {
+// The path of a "/"-separated name below base
+function pathIn(base, name) {
+	return path.join(base, ...name.split("/"));
+}
+
+// Like fs.existsSync, but true for a dangling symlink too
+function lexists(file) {
+	try {
+		fs.lstatSync(file);
+		return true;
+	} catch (e) {
+		return false;
+	}
+}
+
+// A regular file (not a symlink) that really lies inside <folder>/files
+function regularInFiles(folder, file) {
+	try {
+		return fs.lstatSync(file).isFile() && confinedToFiles(folder, file);
+	} catch (e) {
+		return false;
+	}
+}
+
+// "name (n).ext" for a "/"-separated name, n = 1 meaning the name itself
+function numberedVariant(name, n) {
+	const slash = name.lastIndexOf("/");
+	const base = name.slice(slash + 1);
+	const ext = path.extname(base);
+	return name.slice(0, slash + 1) + base.slice(0, base.length - ext.length) + (n === 1 ? "" : " (" + n + ")") + ext;
+}
+
+// The first variant of name that is free or already holds this content; blocked(name) rules out free names
+// other tiddlers point to
+function numberedName(folder, name, sha256, blocked) {
+	const filesDir = path.join(folder, "files");
+	for (let n = 1; ; n++) {
+		const candidate = numberedVariant(name, n);
+		const file = pathIn(filesDir, candidate);
+		if (lexists(file)) {
+			if (regularInFiles(folder, file) && hashOf(fs.readFileSync(file)) === sha256) {
+				return { name: candidate, reuse: true };
+			}
+		} else if (!blocked(candidate)) {
+			return { name: candidate, reuse: false };
+		}
+	}
+}
+
+// Moves a file into backupDir as <name> (folders created, " (2)" on a clash); returns the absolute target
+function backupFile(file, backupDir, name) {
+	let target;
+	for (let n = 1; lexists(target = pathIn(backupDir, numberedVariant(name, n))); n++) {
+		// next number
+	}
+	fs.mkdirSync(path.dirname(target), { recursive: true });
+	try {
+		fs.renameSync(file, target);
+	} catch (e) {
+		if (e.code !== "EXDEV") {
+			throw e;
+		}
+		const bytes = fs.readFileSync(file);
+		fs.copyFileSync(file, target, fs.constants.COPYFILE_EXCL);
+		verify(target, bytes);
+		fs.unlinkSync(file);
+	}
+	return path.resolve(target);
+}
+
+// Writes bytes to files/<name> via a verified temp file. With overwrite the existing file is replaced, after
+// moving it to the backup unless git has it (gitHas holds nameKeys).
+function writeIntoFiles(folder, name, bytes, { overwrite = false, gitHas = new Set(), backupDir = null, caseInsensitive } = {}) {
+	const filesDir = path.join(folder, "files");
+	const target = pathIn(filesDir, name);
+	// No folder of the name may lead out of files/ (a symlinked subfolder)
+	let existing = path.dirname(target);
+	while (existing !== filesDir && !lexists(existing)) {
+		existing = path.dirname(existing);
+	}
+	if (existing !== filesDir && !confinedToFiles(folder, existing)) {
+		throw new Error("files/" + name + " is not in the files folder");
+	}
+	let needsBackup = false;
+	if (overwrite) {
+		if (!regularInFiles(folder, target)) {
+			throw new Error("files/" + name + " is not a regular file in the files folder");
+		}
+		needsBackup = !gitHas.has(nameKey(name, caseInsensitive));
+		if (needsBackup && !backupDir) {
+			throw new Error("No backup folder to keep the old files/" + name);
+		}
+	}
+	fs.mkdirSync(path.dirname(target), { recursive: true });
+	writeSynced(target + TMP, bytes);
+	verify(target + TMP, bytes);
+	let backup = null;
+	if (!overwrite && lexists(target)) {
+		throw new Error("files/" + name + " appeared while writing");
+	}
+	if (needsBackup) {
+		backup = backupFile(target, backupDir, name);
+	}
+	fs.renameSync(target + TMP, target);
+	verify(target, bytes);
+	return { backup };
+}
+
+// Where an update marker's new content goes: { name, reuse, overwrite, replaced, reason }
+function markerTarget(folder, fields, sha256, title, run) {
+	const uri = fields[MARKER];
+	const name = fileNameOfUri(uri);
+	if (name === null || !filesPath(folder, uri)) {
+		throw new Skip(MARKER_OUTSIDE);
+	}
+	if (!run.complete) {
+		throw new Skip(SCAN_WAITS);
+	}
+	const blocked = n => run.taken(n, title);
+	const ext = path.extname(name).toLowerCase();
+	if (!(TYPE_EXTENSIONS.get(fields.type) || []).includes(ext)) {
+		const renamed = name.slice(0, name.length - ext.length) + extensionFor(fields.type);
+		return Object.assign(numberedName(folder, renamed, sha256, blocked), { replaced: null, reason: "marker" });
+	}
+	if (run.taken(name, title)) {
+		return Object.assign(numberedName(folder, name, sha256, blocked), { replaced: null, reason: "shared" });
+	}
+	const file = pathIn(path.join(folder, "files"), name);
+	if (!lexists(file)) {
+		return { name, reuse: false, replaced: null, reason: "marker" };
+	}
+	if (!regularInFiles(folder, file)) {
+		return Object.assign(numberedName(folder, name, sha256, blocked), { replaced: null, reason: "marker" });
+	}
+	if (hashOf(fs.readFileSync(file)) === sha256) {
+		return { name, reuse: true, replaced: null, reason: "marker" };
+	}
+	return { name, reuse: false, overwrite: true, replaced: name, reason: "marker" };
+}
+
+// Re-import over a file that was in use at the last run and is unused now: overwrite it instead of numbering
+function reimportTarget(folder, base, type, sha256, title, run) {
+	const { stem, ext } = safeName(base, type);
+	const name = stem + ext;
+	const file = pathIn(path.join(folder, "files"), name);
+	if (!run.record || !run.complete || !run.record.has(nameKey(name, run.caseInsensitive)) || run.taken(name, title)
+		|| !regularInFiles(folder, file) || hashOf(fs.readFileSync(file)) === sha256) {
+		return null;
+	}
+	return { name, reuse: false, overwrite: true, replaced: name, reason: "reimport" };
+}
+
+// The done entry (without title) for an embedded item moved to files/
+function externalize(folder, item, run) {
 	const { fields, bytes } = loadEmbedded(item);
-	if (!fieldsSafe(fields)) {
+	const marked = MARKER in fields;
+	if (marked && bytes.length === 0) {
+		throw new Skip(MARKER_EMPTY);
+	}
+	const sha256 = hashOf(bytes);
+	const target = marked ? markerTarget(folder, fields, sha256, fields.title, run) : null;
+	const newFields = Object.assign({}, fields);
+	delete newFields[MARKER];
+	if (!fieldsSafe(newFields)) {
 		throw new Skip(UNSAFE);
 	}
 	if (bytes.length === 0) {
@@ -544,23 +712,27 @@ function externalize(folder, item) {
 	fs.mkdirSync(filesDir, { recursive: true });
 	// A binary file keeps its name (TiddlyWiki made it from the title), a .tid's content is named after the title
 	const base = item.form === "file" ? path.basename(item.file) : fields.title;
-	const { name, reuse } = fileNameFor(base, fields.type, filesDir, hashOf(bytes));
-	const target = path.join(filesDir, name);
-	if (reuse) {
-		verify(target, bytes);
+	const chosen = target || reimportTarget(folder, base, fields.type, sha256, fields.title, run)
+		|| fileNameFor(base, fields.type, filesDir, sha256);
+	const { name } = chosen;
+	let backup = null;
+	if (chosen.reuse) {
+		verify(pathIn(filesDir, name), bytes);
 	} else {
-		writeSynced(target + TMP, bytes);
-		if (fs.existsSync(target)) {
-			throw new Error("files/" + name + " appeared while writing");
-		}
-		fs.renameSync(target + TMP, target);
-		verify(target, bytes);
+		backup = writeIntoFiles(folder, name, bytes, {
+			overwrite: !!chosen.overwrite, gitHas: run.gitHas, backupDir: run.backupDir, caseInsensitive: run.caseInsensitive
+		}).backup;
 	}
-	writeVerified(tidFile, serializeFields(Object.assign({}, fields, { _canonical_uri: uriFor(name) })));
+	run.claimed.add(nameKey(name, run.caseInsensitive));
+	newFields._canonical_uri = uriFor(name);
+	writeVerified(tidFile, serializeFields(newFields));
 	if (item.form === "file") {
 		deleteEmbedded(item);
 	}
-	return bytes.length;
+	if (!chosen.reason) {
+		return { action: "externalized", bytes: bytes.length };
+	}
+	return { action: "updated", bytes: bytes.length, name, replaced: chosen.replaced, backup, reason: chosen.reason };
 }
 
 function internalize(folder, item) {
@@ -622,7 +794,10 @@ function recover(folder, policy, items) {
 	const ext = loadExternalized(folder, external[0]);
 	const extFields = Object.assign({}, ext.fields);
 	delete extFields._canonical_uri;
-	if (!ext.source || !fs.existsSync(ext.source) || ext.body.trim() !== "" || !sameFields(emb.fields, extFields)
+	// An update stopped after writing the .tid: the embedded copy still carries the marker
+	const embFields = Object.assign({}, emb.fields);
+	delete embFields[MARKER];
+	if (!ext.source || !fs.existsSync(ext.source) || ext.body.trim() !== "" || !sameFields(embFields, extFields)
 		|| hashOf(fs.readFileSync(ext.source)) !== hashOf(emb.bytes)) {
 		throw new Error(TWO_FILES);
 	}
@@ -662,16 +837,53 @@ function removeTempFiles(folder) {
 	removeTempIn(path.join(folder, "files"), false);
 }
 
+// What a policy run knows besides the items: references to files/ (own tiddlers/ and outside), names written in
+// this run, and the caller's record, git and backup information
+function runContext(scan, options) {
+	const caseInsensitive = options.caseInsensitive === undefined ? defaultCaseInsensitive() : options.caseInsensitive;
+	const outside = options.outside || null;
+	const references = new Map();
+	for (const refs of [scan.references, outside ? outside.references : new Map()]) {
+		for (const [key, ref] of refs) {
+			const known = references.get(key);
+			references.set(key, known
+				? { name: known.name, titles: known.titles.concat(ref.titles.filter(t => !known.titles.includes(t))) }
+				: { name: ref.name, titles: ref.titles.slice() });
+		}
+	}
+	const run = {
+		caseInsensitive,
+		references,
+		complete: scan.complete && (!outside || outside.complete),
+		record: options.record ? new Set(options.record.map(n => nameKey(n, caseInsensitive))) : null,
+		gitHas: options.gitHas || new Set(),
+		backupDir: options.backupDir || null,
+		// nameKeys written or reused in this run: never overwritten implicitly afterwards
+		claimed: new Set()
+	};
+	// Whether a name in files/ is used by a tiddler other than title, or was written in this run
+	run.taken = (name, title) => {
+		const key = nameKey(name, caseInsensitive);
+		const ref = references.get(key);
+		return run.claimed.has(key) || (!!ref && ref.titles.some(t => t !== title));
+	};
+	return run;
+}
+
 // Externalizes or internalizes the binary tiddlers in <folder>/tiddlers; problems with one tiddler
-// are reported, not thrown. The wiki must not be running.
-function applyPolicy(folder, policy) {
+// are reported, not thrown. The wiki must not be running. With externalize, embedded tiddlers carrying the
+// update marker replace their file in files/, and re-imports may overwrite a file that was in use at the
+// previous run (options.record) and is unused now.
+function applyPolicy(folder, policy, options = {}) {
 	if (policy !== "externalize" && policy !== "internalize") {
 		throw new Error("Unknown policy: " + policy);
 	}
 	const result = { done: [], skipped: [], errors: [] };
 	removeTempFiles(folder);
+	const scan = scanFolder(folder, { caseInsensitive: options.caseInsensitive });
+	const run = runContext(scan, options);
 	const byTitle = new Map();
-	for (const item of scanFolder(folder).items) {
+	for (const item of scan.items) {
 		if (item.form === "file" && !item.meta) {
 			// Its title in TW is the absolute path; moving it would rename the tiddler
 			if (policy === "externalize") {
@@ -681,12 +893,17 @@ function applyPolicy(folder, policy) {
 		}
 		byTitle.set(item.title, (byTitle.get(item.title) || []).concat(item));
 	}
+	// Recovery, updates and moves
 	for (const [title, items] of byTitle) {
 		try {
 			if (items.length > 1) {
 				result.done.push({ title, action: "recovered", bytes: recover(folder, policy, items) });
 			} else if (policy === "externalize" && items[0].state === "embedded") {
-				result.done.push({ title, action: "externalized", bytes: externalize(folder, items[0]) });
+				result.done.push(Object.assign({ title }, externalize(folder, items[0], run)));
+			} else if (policy === "externalize" && items[0].state === "externalized") {
+				if (MARKER in loadExternalized(folder, items[0]).fields) {
+					throw new Skip(MARKER_AND_URI);
+				}
 			} else if (policy === "internalize" && items[0].state === "externalized") {
 				result.done.push({ title, action: "internalized", bytes: internalize(folder, items[0]) });
 			}
@@ -698,7 +915,8 @@ function applyPolicy(folder, policy) {
 			}
 		}
 	}
+	// files/ is now as updates and moves left it (run.claimed holds the names they wrote)
 	return result;
 }
 
-module.exports = { BASE64_TYPES, extensionFor, fileNameFor, typeForExtension, parseFields, serializeFields, fieldsSafe, scanFolder, nameKey, fileNameOfUri, listFiles, MARKER, applyPolicy, removeTempFiles };
+module.exports = { BASE64_TYPES, extensionFor, fileNameFor, typeForExtension, parseFields, serializeFields, fieldsSafe, scanFolder, nameKey, fileNameOfUri, listFiles, MARKER, applyPolicy, backupFile, removeTempFiles };

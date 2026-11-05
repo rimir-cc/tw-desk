@@ -485,3 +485,221 @@ test("listFiles: regular files only", () => {
 	assert.deepEqual(binaries.listFiles(dir).sort(), ["a.png", "sub/b.pdf"]);
 	assert.deepEqual(binaries.listFiles(path.join(dir, "none")), []);
 });
+
+// Updates
+
+const OLD = Buffer.from("old content of the file");
+const NEW = Buffer.from("new content, longer than the old one");
+const M = binaries.MARKER;
+const backupOf = () => path.join(dir, "backup");
+
+function putReportUpdate(extraMeta = "") {
+	put("files/report.pdf", OLD);
+	put("tiddlers/report.pdf", NEW);
+	put("tiddlers/report.pdf.meta", "title: Report\ntype: application/pdf\ntags: x\n" + M + ": files/report.pdf\n" + extraMeta);
+}
+
+test("update: marker overwrites the same file and keeps the fields", () => {
+	putReportUpdate();
+	const result = binaries.applyPolicy(dir, "externalize", { record: ["report.pdf"], backupDir: backupOf() });
+	assert.deepEqual(result.errors, []);
+	assert.deepEqual(result.skipped, []);
+	assert.deepEqual(read("files/report.pdf"), NEW);
+	assert.deepEqual(tidFields("tiddlers/report.pdf.tid").fields,
+		{ title: "Report", type: "application/pdf", tags: "x", _canonical_uri: "files/report.pdf" });
+	assert.equal(exists("tiddlers/report.pdf"), false);
+	assert.equal(exists("tiddlers/report.pdf.meta"), false);
+	assert.partialDeepStrictEqual(result.done[0], { title: "Report", action: "updated", bytes: NEW.length, name: "report.pdf", replaced: "report.pdf", reason: "marker" });
+	assert.equal(result.done[0].backup, path.join(backupOf(), "report.pdf"));
+	assert.deepEqual(fs.readFileSync(path.join(backupOf(), "report.pdf")), OLD);
+});
+
+test("update: git has the old version → no backup", () => {
+	putReportUpdate();
+	const result = binaries.applyPolicy(dir, "externalize", { record: ["report.pdf"], backupDir: backupOf(), gitHas: new Set(["report.pdf"]) });
+	assert.partialDeepStrictEqual(result.done[0], { action: "updated", name: "report.pdf", replaced: "report.pdf", reason: "marker" });
+	assert.equal(result.done[0].backup, null);
+	assert.equal(fs.existsSync(backupOf()), false);
+	assert.deepEqual(read("files/report.pdf"), NEW);
+});
+
+test("update: without a backup folder nothing is overwritten", () => {
+	putReportUpdate();
+	const result = binaries.applyPolicy(dir, "externalize");
+	assert.deepEqual(result.done, []);
+	assert.equal(result.errors.length, 1);
+	assert.deepEqual(read("files/report.pdf"), OLD);
+	assert.deepEqual(fs.readdirSync(path.join(dir, "tiddlers")).sort(), ["report.pdf", "report.pdf.meta"]);
+	assert.deepEqual(fs.readdirSync(path.join(dir, "files")), ["report.pdf"]);
+});
+
+test("update: new type gets the new extension", () => {
+	put("files/pic.png", OLD);
+	put("tiddlers/pic.jpg", NEW);
+	put("tiddlers/pic.jpg.meta", "title: Pic\ntype: image/jpeg\n" + M + ": files/pic.png\n");
+	const result = binaries.applyPolicy(dir, "externalize", { backupDir: backupOf() });
+	assert.deepEqual(result.errors, []);
+	assert.partialDeepStrictEqual(result.done[0], { action: "updated", name: "pic.jpg", replaced: null, backup: null, reason: "marker" });
+	assert.deepEqual(read("files/pic.jpg"), NEW);
+	assert.deepEqual(read("files/pic.png"), OLD);
+	assert.equal(tidFields("tiddlers/pic.jpg.tid").fields._canonical_uri, "files/pic.jpg");
+});
+
+test("update: shared file is not overwritten", () => {
+	putReportUpdate();
+	put("tiddlers/Other.tid", "title: Other\ntype: application/pdf\n_canonical_uri: files/report.pdf\n");
+	const result = binaries.applyPolicy(dir, "externalize", { record: ["report.pdf"], backupDir: backupOf() });
+	assert.deepEqual(result.errors, []);
+	assert.partialDeepStrictEqual(result.done[0], { title: "Report", action: "updated", name: "report (2).pdf", replaced: null, backup: null, reason: "shared" });
+	assert.deepEqual(read("files/report.pdf"), OLD);
+	assert.deepEqual(read("files/report (2).pdf"), NEW);
+	assert.equal(tidFields("tiddlers/report.pdf.tid").fields._canonical_uri, "files/report (2).pdf");
+	assert.equal(fs.existsSync(backupOf()), false);
+});
+
+test("update: a symlink or directory at the marker's name is not overwritten", t => {
+	put("files/outside.pdf", OLD);
+	try {
+		fs.symlinkSync(path.join(dir, "files", "outside.pdf"), path.join(dir, "files", "report.pdf"));
+	} catch (e) {
+		t.skip("no symlinks here");
+		return;
+	}
+	put("tiddlers/report.pdf", NEW);
+	put("tiddlers/report.pdf.meta", "title: Report\ntype: application/pdf\n" + M + ": files/report.pdf\n");
+	put("tiddlers/dir.pdf", NEW);
+	put("tiddlers/dir.pdf.meta", "title: Dir\ntype: application/pdf\n" + M + ": files/dir.pdf\n");
+	fs.mkdirSync(path.join(dir, "files", "dir.pdf"));
+	const result = binaries.applyPolicy(dir, "externalize", { backupDir: backupOf() });
+	assert.deepEqual(result.errors, []);
+	const byTitle = Object.fromEntries(result.done.map(d => [d.title, d]));
+	assert.partialDeepStrictEqual(byTitle.Report, { name: "report (2).pdf", replaced: null });
+	assert.partialDeepStrictEqual(byTitle.Dir, { name: "dir (2).pdf", replaced: null });
+	assert.deepEqual(read("files/outside.pdf"), OLD);
+	assert.ok(fs.lstatSync(path.join(dir, "files", "report.pdf")).isSymbolicLink());
+});
+
+test("update: odd markers are skipped", () => {
+	const cases = [
+		["meta", "title: A\ntype: application/pdf\n" + M + ": files/report.pdf\n_canonical_uri: files/report.pdf\n", NEW, "update marker and _canonical_uri together"],
+		["meta", "title: A\ntype: application/pdf\n" + M + ": files/report.pdf\n", Buffer.alloc(0), "update marker without new content"],
+		["meta", "title: A\ntype: application/pdf\n" + M + ": files/../tiddlers/x.pdf\n", NEW, "update marker outside files/"],
+		["meta", "title: A\ntype: application/pdf\n" + M + ": https://example.com/files/x.pdf\n", NEW, "update marker outside files/"],
+		["tid", "title: A\ntype: application/pdf\n" + M + ": files/report.pdf\n_canonical_uri: files/report.pdf\n", null, "update marker and _canonical_uri together"]
+	];
+	for (const [form, fields, bytes, reason] of cases) {
+		fs.rmSync(path.join(dir, "tiddlers"), { recursive: true, force: true });
+		put("files/report.pdf", OLD);
+		if (form === "meta") {
+			put("tiddlers/a.pdf", bytes);
+			put("tiddlers/a.pdf.meta", fields);
+		} else {
+			put("tiddlers/a.pdf.tid", fields);
+		}
+		const before = fs.readdirSync(path.join(dir, "tiddlers")).sort().map(n => [n, read(path.join("tiddlers", n))]);
+		const result = binaries.applyPolicy(dir, "externalize", { record: ["report.pdf"], backupDir: backupOf() });
+		assert.deepEqual(result, { done: [], skipped: [{ title: "A", reason }], errors: [] }, reason);
+		assert.deepEqual(fs.readdirSync(path.join(dir, "tiddlers")).sort().map(n => [n, read(path.join("tiddlers", n))]), before);
+		assert.deepEqual(fs.readdirSync(path.join(dir, "files")), ["report.pdf"]);
+		assert.deepEqual(read("files/report.pdf"), OLD);
+		assert.equal(fs.existsSync(backupOf()), false);
+	}
+});
+
+test("update: incomplete scan waits", () => {
+	putReportUpdate();
+	put("tiddlers/bundle/tiddlywiki.files", "{}");
+	const result = binaries.applyPolicy(dir, "externalize", { record: ["report.pdf"], backupDir: backupOf() });
+	assert.deepEqual(result, { done: [], skipped: [{ title: "Report", reason: "scan incomplete – update waits" }], errors: [] });
+	assert.deepEqual(read("files/report.pdf"), OLD);
+	assert.ok(exists("tiddlers/report.pdf.meta"));
+	fs.rmSync(path.join(dir, "tiddlers", "bundle"), { recursive: true });
+	const outside = { references: new Map(), complete: false, problems: ["x"] };
+	assert.deepEqual(binaries.applyPolicy(dir, "externalize", { record: ["report.pdf"], backupDir: backupOf(), outside }).skipped,
+		[{ title: "Report", reason: "scan incomplete – update waits" }]);
+});
+
+test("update: references from outside count as shared", () => {
+	putReportUpdate();
+	const outside = { references: new Map([["report.pdf", { name: "report.pdf", titles: ["Elsewhere"] }]]), complete: true, problems: [] };
+	const result = binaries.applyPolicy(dir, "externalize", { record: ["report.pdf"], backupDir: backupOf(), outside, caseInsensitive: false });
+	assert.partialDeepStrictEqual(result.done[0], { name: "report (2).pdf", reason: "shared" });
+	assert.deepEqual(read("files/report.pdf"), OLD);
+});
+
+test("update: implicit overwrite on re-import", () => {
+	const setup = () => {
+		fs.rmSync(path.join(dir, "tiddlers"), { recursive: true, force: true });
+		fs.rmSync(path.join(dir, "files"), { recursive: true, force: true });
+		put("files/report.pdf", OLD);
+		put("tiddlers/report.pdf", NEW);
+		put("tiddlers/report.pdf.meta", "title: report.pdf\ntype: application/pdf\n");
+	};
+	setup();
+	let result = binaries.applyPolicy(dir, "externalize", { record: ["report.pdf"], backupDir: backupOf() });
+	assert.deepEqual(result.errors, []);
+	assert.partialDeepStrictEqual(result.done[0], { action: "updated", name: "report.pdf", replaced: "report.pdf", reason: "reimport" });
+	assert.deepEqual(read("files/report.pdf"), NEW);
+	assert.deepEqual(fs.readFileSync(result.done[0].backup), OLD);
+	assert.equal(tidFields("tiddlers/report.pdf.tid").fields._canonical_uri, "files/report.pdf");
+	for (const record of [null, ["other.pdf"]]) {
+		setup();
+		result = binaries.applyPolicy(dir, "externalize", { record, backupDir: backupOf() });
+		assert.deepEqual(result.done, [{ title: "report.pdf", action: "externalized", bytes: NEW.length }]);
+		assert.deepEqual(read("files/report.pdf"), OLD);
+		assert.deepEqual(read("files/report (2).pdf"), NEW);
+	}
+	// Still referenced by another tiddler
+	setup();
+	put("tiddlers/Other.tid", "title: Other\ntype: application/pdf\n_canonical_uri: files/report.pdf\n");
+	result = binaries.applyPolicy(dir, "externalize", { record: ["report.pdf"], backupDir: backupOf() });
+	assert.deepEqual(result.done, [{ title: "report.pdf", action: "externalized", bytes: NEW.length }]);
+	assert.deepEqual(read("files/report.pdf"), OLD);
+});
+
+test("update: implicit overwrite only once per name", () => {
+	put("files/report.pdf", OLD);
+	put("tiddlers/a/report.pdf", NEW);
+	put("tiddlers/a/report.pdf.meta", "title: Report\ntype: application/pdf\n");
+	put("tiddlers/b/report.pdf", PNG);
+	put("tiddlers/b/report.pdf.meta", "title: report.pdf\ntype: application/pdf\n");
+	const result = binaries.applyPolicy(dir, "externalize", { record: ["report.pdf"], backupDir: backupOf() });
+	assert.deepEqual(result.errors, []);
+	assert.equal(result.done.length, 2);
+	assert.equal(result.done.filter(d => d.reason === "reimport").length, 1);
+	const other = result.done.find(d => d.reason !== "reimport");
+	assert.equal(other.action, "externalized");
+	const uris = ["a", "b"].map(sub => tidFields(path.join("tiddlers", sub, "report.pdf.tid")).fields._canonical_uri).sort();
+	assert.deepEqual(uris, ["files/report (2).pdf", "files/report.pdf"]);
+	assert.deepEqual(fs.readdirSync(path.join(dir, "files")).sort(), ["report (2).pdf", "report.pdf"]);
+});
+
+test("update: recovers a half-done update", () => {
+	put("files/report.pdf", NEW);
+	put("tiddlers/report.pdf.tid", "title: Report\ntype: application/pdf\ntags: x\n_canonical_uri: files/report.pdf\n");
+	put("tiddlers/report.pdf", NEW);
+	put("tiddlers/report.pdf.meta", "title: Report\ntype: application/pdf\ntags: x\n" + M + ": files/report.pdf\n");
+	const result = binaries.applyPolicy(dir, "externalize", { record: ["report.pdf"], backupDir: backupOf() });
+	assert.deepEqual(result, { done: [{ title: "Report", action: "recovered", bytes: NEW.length }], skipped: [], errors: [] });
+	assert.deepEqual(fs.readdirSync(path.join(dir, "tiddlers")), ["report.pdf.tid"]);
+	assert.deepEqual(read("files/report.pdf"), NEW);
+});
+
+test("update: internalize ignores the marker", () => {
+	putReportUpdate();
+	const result = binaries.applyPolicy(dir, "internalize", { record: ["report.pdf"], backupDir: backupOf() });
+	assert.deepEqual(result, { done: [], skipped: [], errors: [] });
+	assert.deepEqual(read("files/report.pdf"), OLD);
+	assert.deepEqual(read("tiddlers/report.pdf"), NEW);
+	assert.match(read("tiddlers/report.pdf.meta").toString("utf8"), new RegExp(M));
+});
+
+test("backupFile: subfolders and numbering", () => {
+	put("files/sub/x.pdf", OLD);
+	put("backup/sub/x.pdf", "earlier");
+	const target = binaries.backupFile(path.join(dir, "files", "sub", "x.pdf"), backupOf(), "sub/x.pdf");
+	assert.equal(target, path.join(backupOf(), "sub", "x (2).pdf"));
+	assert.deepEqual(fs.readFileSync(target), OLD);
+	assert.equal(exists("files/sub/x.pdf"), false);
+	assert.equal(read("backup/sub/x.pdf").toString("utf8"), "earlier");
+});

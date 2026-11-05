@@ -78,8 +78,8 @@ test("scan: ignored", () => {
 	const scan = binaries.scanFolder(dir);
 	assert.deepEqual(scan.items, []);
 	assert.deepEqual(scan.skipped.map(s => [path.relative(dir, s.file), s.reason]).sort(), [
-		["tiddlers/bundle", "tiddlywiki.files"],
-		["tiddlers/data.json", "json"]
+		[path.join("tiddlers", "bundle"), "tiddlywiki.files"],
+		[path.join("tiddlers", "data.json"), "json"]
 	]);
 });
 

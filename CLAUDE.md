@@ -204,6 +204,8 @@ rules everywhere, so wikis stay usable on Windows. The manager window quits the 
 - Code style: tabs, double quotes, plain JS (no build step), small comments only where the "why" isn't obvious.
 - Commit only when asked; end messages with the Co-Authored-By line given in the session. Stage files
   explicitly – `.esaca/` (local sandbox config) is ignored but don't use broad `git add` habits.
+- Unit tests also run on the user's Windows checkout (CRLF line endings, `\` paths): build expected paths with
+  `path.join`/`path.relative`, never compare against `"a/b"` strings, and don't assume `\n` when reading source files.
 - In this environment Bash heredocs can mangle backslashes (`\\` → `\`); use the Edit/Write tools for
   files containing backslashes (JSON with Windows paths, regexes).
 

@@ -8,7 +8,8 @@ const vm = require("vm");
 
 // formatBytes exists in main.js and renderer.js (no shared module); both must give the same text
 function load(file) {
-	const source = fs.readFileSync(path.join(__dirname, "../../src", file), "utf8");
+	// A Windows checkout may have CRLF line endings
+	const source = fs.readFileSync(path.join(__dirname, "../../src", file), "utf8").replace(/\r\n/g, "\n");
 	const start = source.indexOf("function formatBytes");
 	const end = source.indexOf("\n}\n", start) + 3;
 	const context = {};

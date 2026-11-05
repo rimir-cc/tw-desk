@@ -21,7 +21,9 @@ contextBridge.exposeInMainWorld("twDesk", {
 	saveIncludes: (id, entries) => ipcRenderer.invoke("save-includes", id, entries),
 	binaries: {
 		apply: id => ipcRenderer.invoke("binaries-apply", id),
-		scan: id => ipcRenderer.invoke("binaries-scan", id)
+		scan: id => ipcRenderer.invoke("binaries-scan", id),
+		deleteUnused: (id, names) => ipcRenderer.invoke("binaries-delete-unused", id, names),
+		keep: id => ipcRenderer.invoke("binaries-keep", id)
 	},
 	plugins: {
 		getState: () => ipcRenderer.invoke("plugins-state"),

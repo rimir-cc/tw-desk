@@ -573,7 +573,7 @@ test("update: shared file is not overwritten", () => {
 	put("tiddlers/Other.tid", "title: Other\ntype: application/pdf\n_canonical_uri: files/report.pdf\n");
 	const result = binaries.applyPolicy(dir, "externalize", { record: ["report.pdf"], backupDir: backupOf() });
 	assert.deepEqual(result.errors, []);
-	assert.partialDeepStrictEqual(result.done[0], { title: "Report", action: "updated", name: "report (2).pdf", replaced: null, backup: null, reason: "shared" });
+	assert.partialDeepStrictEqual(result.done[0], { title: "Report", action: "updated", name: "report (2).pdf", replaced: null, backup: null, reason: "shared", wanted: "report.pdf" });
 	assert.deepEqual(read("files/report.pdf"), OLD);
 	assert.deepEqual(read("files/report (2).pdf"), NEW);
 	assert.equal(tidFields("tiddlers/report.pdf.tid").fields._canonical_uri, "files/report (2).pdf");

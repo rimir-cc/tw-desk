@@ -846,25 +846,108 @@ function scanWikiBinaries(wiki) {
 		skipped: 0,
 		includes: { embedded: { count: 0, bytes: 0 } },
 		blockedBy: [],
+		// From the record of the last run: files waiting for the user's OK
+		pending: [],
+		// Files in files/ nothing refers to and the record doesn't hold (only with "externalize")
+		unused: 0,
 		lastResult: previous ? previous.lastResult : null,
 		scannedAt: Date.now(),
 		error: null
 	};
 	try {
-		const scan = binaries.scanFolder(path.resolve(wiki.path));
+		const folder = path.resolve(wiki.path);
+		const scan = binaries.scanFolder(folder, { caseInsensitive: CASE_INSENSITIVE_PATHS });
 		summary.embedded = scan.embedded;
 		summary.externalized = scan.externalized;
 		summary.skipped = scan.skipped.length;
-		for (const include of readIncludes(wiki.path).includes.filter(i => i.exists)) {
-			const included = binaries.scanFolder(include.resolved);
-			summary.includes.embedded.count += included.embedded.count;
-			summary.includes.embedded.bytes += included.embedded.bytes;
+		const included = includeScans(wiki);
+		for (const one of included) {
+			summary.includes.embedded.count += one.embedded.count;
+			summary.includes.embedded.bytes += one.embedded.bytes;
 		}
 		summary.blockedBy = includedBy(wiki);
+		const record = readRecord(wiki);
+		summary.pending = record ? record.pending : [];
+		if (binarySettingsOf(wiki).policy === "externalize") {
+			const outside = outsideReferences(wiki, included);
+			const known = new Set([...scan.references.keys(), ...outside.references.keys()]);
+			for (const name of record ? record.inUse.concat(record.pending) : []) {
+				known.add(binaries.nameKey(name, CASE_INSENSITIVE_PATHS));
+			}
+			summary.unused = binaries.listFiles(folder).filter(name => !known.has(binaries.nameKey(name, CASE_INSENSITIVE_PATHS))).length;
+		}
 	} catch (e) {
 		summary.error = e.message;
 	}
 	binaryScans.set(wiki.id, summary);
+}
+
+// Scans of the wiki's existing includes
+function includeScans(wiki) {
+	return readIncludes(wiki.path).includes.filter(i => i.exists).map(i => binaries.scanFolder(i.resolved, { caseInsensitive: CASE_INSENSITIVE_PATHS }));
+}
+
+// References to the wiki's files/ from outside its tiddlers/: its includes and its plugins/ folder, merged into
+// { references, complete, problems } as binaries.applyPolicy takes them
+function outsideReferences(wiki, included = includeScans(wiki)) {
+	const outside = { references: new Map(), complete: true, problems: [] };
+	const info = readIncludes(wiki.path);
+	if (info.infoError) {
+		// Unknown includes could refer to any file
+		outside.complete = false;
+		outside.problems.push(info.infoError);
+	}
+	const own = binaries.scanFolder(path.resolve(wiki.path), { sub: "plugins", optional: true, caseInsensitive: CASE_INSENSITIVE_PATHS });
+	for (const scan of included.concat(own)) {
+		for (const [key, ref] of scan.references) {
+			const known = outside.references.get(key);
+			if (known) {
+				known.titles.push(...ref.titles.filter(t => !known.titles.includes(t)));
+			} else {
+				outside.references.set(key, { name: ref.name, titles: ref.titles.slice() });
+			}
+		}
+		outside.complete = outside.complete && scan.complete;
+		outside.problems.push(...scan.problems);
+	}
+	return outside;
+}
+
+// The names in files/ that were in use at the wiki's last policy run (<userData>/binaries/<id>.json, written only
+// by runs): inUse were referenced, pending are unused and wait for the user's OK. Belongs to one folder.
+function recordFile(id) {
+	return path.join(app.getPath("userData"), "binaries", id + ".json");
+}
+
+// { inUse, pending }, or null when there is none, it can't be read, or it was made for another folder
+function readRecord(wiki) {
+	try {
+		const data = JSON.parse(fs.readFileSync(recordFile(wiki.id), "utf8"));
+		if (!data || typeof data !== "object" || data.folder !== folderKey(wiki.path)) {
+			return null;
+		}
+		const names = list => (Array.isArray(list) ? list.filter(n => typeof n === "string") : []);
+		return { inUse: names(data.inUse), pending: names(data.pending) };
+	} catch (e) {
+		return null;
+	}
+}
+
+function writeRecord(wiki, inUse, pending) {
+	const file = recordFile(wiki.id);
+	fs.mkdirSync(path.dirname(file), { recursive: true });
+	const temp = file + ".tmp";
+	fs.writeFileSync(temp, JSON.stringify({ folder: folderKey(wiki.path), inUse, pending }, null, 2));
+	fs.renameSync(temp, file);
+}
+
+// Forgets the record: the next run only records again (nothing it didn't see in use is ever deleted)
+function dropRecord(id) {
+	try {
+		fs.rmSync(recordFile(id), { force: true });
+	} catch (e) {
+		console.error("could not remove the binary record of " + id + ":", e);
+	}
 }
 
 function queueBinaries(job) {
@@ -899,7 +982,7 @@ function scheduleBinaryScans() {
 	binaryTimer = setInterval(() => scanBinaries(), BINARY_SCAN_INTERVAL);
 }
 
-function logBinaryResult(wiki, policy, result) {
+function logBinaryResult(wiki, policy, result, hadRecord) {
 	const sum = action => {
 		const items = result.done.filter(d => d.action === action);
 		return { count: items.length, bytes: items.reduce((total, d) => total + (d.bytes || 0), 0) };
@@ -913,6 +996,32 @@ function logBinaryResult(wiki, policy, result) {
 	if (recovered.count) {
 		binaryLog(wiki.id, "Finished " + recovered.count + " interrupted binary " + (recovered.count === 1 ? "move" : "moves"));
 	}
+	for (const update of result.done.filter(d => d.action === "updated")) {
+		if (update.reason === "reimport") {
+			binaryLog(wiki.id, "Updated files/" + update.name + " (re-imported \u201c" + update.title + "\u201d)");
+		} else if (update.reason === "shared") {
+			binaryLog(wiki.id, "Updated \u201c" + update.title + "\u201d into files/" + update.name + " \u2013 files/" + update.wanted + " is still used by another tiddler");
+		} else {
+			binaryLog(wiki.id, "Updated files/" + update.name);
+		}
+		if (update.backup) {
+			binaryLog(wiki.id, "Backed up files/" + (update.replaced || update.name) + " to " + update.backup);
+		}
+	}
+	for (const deleted of result.deleted || []) {
+		binaryLog(wiki.id, "Deleted files/" + deleted.name + " \u2013 its tiddler was removed");
+		if (deleted.backup) {
+			binaryLog(wiki.id, "Backed up files/" + deleted.name + " to " + deleted.backup);
+		}
+	}
+	if (result.guard) {
+		const n = result.guard.count;
+		const why = result.guard.reason === "many" ? "more than 10 at once" : "that would be every file in use";
+		binaryLog(wiki.id, "Not deleting " + n + " unused files: " + why + " \u2013 use \u22ef \u203a Delete " + n + " unused files\u2026");
+	}
+	if (result.incomplete && hadRecord) {
+		binaryLog(wiki.id, "No files deleted: " + result.incomplete);
+	}
 	for (const skip of result.skipped) {
 		binaryLog(wiki.id, "Binary tiddler \u201c" + skip.title + "\u201d skipped: " + skip.reason);
 	}
@@ -922,19 +1031,37 @@ function logBinaryResult(wiki, policy, result) {
 }
 
 // Runs the wiki's policy now (queued). Null when there's nothing to do: "leave", the wiki runs, or another managed
-// wiki includes it. Throws (after logging) when the whole run failed.
-function applyBinaryPolicy(wiki) {
-	return queueBinaries(() => {
-		const current = config.wikis.find(w => w.id === wiki.id);
-		// Never while quitting: the app could exit in the middle of moving files
-		if (!current || quitting) {
+// wiki includes it. Throws (after logging) when the whole run failed. extra.confirmDelete: names in files/ the user
+// agreed to delete (externalize only; bypasses the mass-deletion guard for exactly these).
+function applyBinaryPolicy(wiki, extra = {}) {
+	return queueBinaries(async () => {
+		// Never while quitting: the app could exit in the middle of moving files.
+		// Checked again after the git query: the wiki could have been started or changed meanwhile
+		const ready = () => {
+			const found = config.wikis.find(w => w.id === wiki.id);
+			if (!found || quitting) {
+				return null;
+			}
+			const policy = binarySettingsOf(found).policy;
+			return policy === "leave" || isRunningWiki(found.id) ? null : { wiki: found, policy };
+		};
+		let check = ready();
+		if (!check) {
 			return null;
 		}
+		let gitHas = new Set();
+		if (check.policy === "externalize") {
+			const committed = await git.committedFiles(path.resolve(check.wiki.path));
+			gitHas = new Set([...committed].map(name => binaries.nameKey(name, CASE_INSENSITIVE_PATHS)));
+			const again = ready();
+			if (!again || again.policy !== "externalize" || folderKey(again.wiki.path) !== folderKey(check.wiki.path)) {
+				return null;
+			}
+			check = again;
+		}
+		// From here on synchronous, so nothing can start the wiki in the middle of it
+		const current = check.wiki;
 		const settings = binarySettingsOf(current);
-		// Checked again here: the wiki could have been started while this waited in the queue
-		if (settings.policy === "leave" || isRunningWiki(current.id)) {
-			return null;
-		}
 		const blockers = includedBy(current);
 		if (blockers.length) {
 			binaryLog(current.id, "Binary policy not applied: included by " + blockers.join(", "));
@@ -958,19 +1085,47 @@ function applyBinaryPolicy(wiki) {
 				binaryLog(current.id, "Could not add files/ to .gitignore: " + e.message);
 			}
 		}
+		const folder = path.resolve(current.path);
+		const options = { caseInsensitive: CASE_INSENSITIVE_PATHS };
+		let hadRecord = false;
+		if (settings.policy === "internalize") {
+			// files/ may change by hand afterwards: a later externalize run starts by recording again
+			dropRecord(current.id);
+		}
 		let result;
 		try {
-			// Synchronous, so nothing can start the wiki in the middle of it
-			result = binaries.applyPolicy(path.resolve(current.path), settings.policy);
+			if (settings.policy === "externalize") {
+				const record = readRecord(current);
+				hadRecord = !!record;
+				const stamp = new Date().toISOString().replace(/[:.]/g, "-");
+				Object.assign(options, {
+					record: record ? record.inUse.concat(record.pending) : null,
+					gitHas,
+					backupDir: path.join(app.getPath("userData"), "backup", stamp, path.basename(folder), "files"),
+					outside: outsideReferences(current)
+				});
+				if (Array.isArray(extra.confirmDelete)) {
+					options.confirmDelete = extra.confirmDelete;
+				}
+			}
+			result = binaries.applyPolicy(folder, settings.policy, options);
 		} catch (e) {
 			binaryLog(current.id, "Binary policy failed: " + e.message);
-			result = { done: [], skipped: [], errors: [{ title: "(whole run)", message: e.message }] };
+			result = { done: [], skipped: [], errors: [{ title: "(whole run)", message: e.message }], deleted: [], pending: [], guard: null, incomplete: null, record: null };
 			scanWikiBinaries(current);
 			binaryScans.get(current.id).lastResult = result;
 			pushState();
 			throw e;
 		}
-		logBinaryResult(current, settings.policy, result);
+		if (settings.policy === "externalize" && result.record) {
+			try {
+				const pending = new Set(result.pending.map(name => binaries.nameKey(name, CASE_INSENSITIVE_PATHS)));
+				writeRecord(current, result.record.filter(name => !pending.has(binaries.nameKey(name, CASE_INSENSITIVE_PATHS))), result.pending);
+			} catch (e) {
+				binaryLog(current.id, "Could not save which files are in use: " + e.message);
+			}
+		}
+		logBinaryResult(current, settings.policy, result, hadRecord);
 		scanWikiBinaries(current);
 		binaryScans.get(current.id).lastResult = result;
 		pushState();
@@ -1315,6 +1470,11 @@ ipcMain.handle("save-wiki", (event, input) => {
 	if (index === -1) {
 		config.wikis.push(wiki);
 	} else {
+		const old = config.wikis[index];
+		// The record belongs to one folder and one policy: switching away and back must not delete anything
+		if (binarySettingsOf(old).policy !== wiki.binaries.policy || folderKey(old.path) !== folderKey(wiki.path)) {
+			dropRecord(wiki.id);
+		}
 		config.wikis[index] = wiki;
 	}
 	saveConfig();
@@ -1330,7 +1490,8 @@ ipcMain.handle("save-includes", (event, id, entries) => {
 	scanBinaries();
 });
 
-ipcMain.handle("binaries-apply", async (event, id) => {
+// Why the binary policy can't run for the wiki now (throws), else the wiki
+function binaryRunnable(id) {
 	const wiki = findWiki(id);
 	if (binarySettingsOf(wiki).policy === "leave") {
 		throw new Error("Policy is \"leave as is\".");
@@ -1341,7 +1502,35 @@ ipcMain.handle("binaries-apply", async (event, id) => {
 	if (quitting) {
 		throw new Error("TW Desk is quitting.");
 	}
-	return applyBinaryPolicy(wiki);
+	return wiki;
+}
+
+ipcMain.handle("binaries-apply", async (event, id) => applyBinaryPolicy(binaryRunnable(id)));
+
+// Deletes the unused files the user agreed to (names from the scan's pending list), in a normal policy run
+ipcMain.handle("binaries-delete-unused", async (event, id, names) => {
+	const wiki = binaryRunnable(id);
+	if (binarySettingsOf(wiki).policy !== "externalize") {
+		throw new Error("Files are only deleted with the policy \"externalize\".");
+	}
+	if (!Array.isArray(names) || names.some(n => typeof n !== "string")) {
+		throw new Error("No file names given.");
+	}
+	return applyBinaryPolicy(wiki, { confirmDelete: names });
+});
+
+// Keeps the files waiting for deletion: they leave the record, so no run deletes them
+ipcMain.handle("binaries-keep", async (event, id) => {
+	findWiki(id);
+	await queueBinaries(() => {
+		const wiki = config.wikis.find(w => w.id === id);
+		const record = wiki && readRecord(wiki);
+		if (record && record.pending.length) {
+			const pending = new Set(record.pending.map(name => binaries.nameKey(name, CASE_INSENSITIVE_PATHS)));
+			writeRecord(wiki, record.inUse.filter(name => !pending.has(binaries.nameKey(name, CASE_INSENSITIVE_PATHS))), []);
+		}
+	});
+	return scanBinaries([id]);
 });
 
 ipcMain.handle("binaries-scan", (event, id) => {
@@ -1563,6 +1752,7 @@ ipcMain.handle("plugins-move-to-store", (event, folderPath, file) => {
 
 ipcMain.handle("remove-wiki", (event, id) => {
 	stopWiki(id);
+	dropRecord(id);
 	config.wikis = config.wikis.filter(w => w.id !== id);
 	saveConfig();
 	pushState();
@@ -1627,6 +1817,7 @@ ipcMain.handle("delete-wiki", async (event, id) => {
 		win.close();
 	}
 	servers.delete(id);
+	dropRecord(id);
 	config.wikis = config.wikis.filter(w => w.id !== id);
 	saveConfig();
 	pushState();

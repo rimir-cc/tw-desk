@@ -115,3 +115,123 @@ test("binaries: an included wiki is only reported", async ({ desk }) => {
 	expect(exists(shared, "files")).toBe(false);
 	await expect(desk.row("Shared").locator(".binary-chip")).toHaveText("▣ 1 embedded · 100 B");
 });
+
+function putFile(folder, name, title, type, bytes) {
+	fs.writeFileSync(path.join(folder, "tiddlers", name), bytes);
+	fs.writeFileSync(path.join(folder, "tiddlers", name + ".meta"), "title: " + title + "\ntype: " + type + "\n");
+}
+
+function filesIn(folder) {
+	const dir = path.join(folder, "files");
+	return fs.existsSync(dir) ? fs.readdirSync(dir).sort() : [];
+}
+
+async function logText(desk, row) {
+	await desk.rowMenu(row, "Log");
+	return desk.page.locator("#log-output");
+}
+
+test("binaries: delete and update", async ({ desk }) => {
+	const alpha = desk.wiki("alpha");
+	putBinary(alpha, "photo.png", "Photo");
+	putFile(alpha, "report.pdf", "Report", "application/pdf", Buffer.alloc(300, 1));
+	const page = await desk.launch({ wikis: [{ name: "Alpha", path: alpha, binaries: EXTERNALIZE }] });
+	const row = desk.row("Alpha");
+	const form = page.locator("#wiki-form");
+
+	// The start-up run externalizes both (and only records what's in use)
+	await expect.poll(() => filesIn(alpha)).toEqual(["photo.png", "report.pdf"]);
+
+	// A removed tiddler: its file goes (to the backup, the wiki isn't in git)
+	fs.unlinkSync(path.join(alpha, "tiddlers", "photo.png.tid"));
+	await desk.rowMenu(row, "Apply binary policy now");
+	await expect.poll(() => exists(alpha, "files", "photo.png")).toBe(false);
+	await expect(await logText(desk, row)).toContainText("Deleted files/photo.png – its tiddler was removed");
+	await expect(page.locator("#log-output")).toContainText("Backed up files/photo.png to ");
+
+	// An update via the marker replaces the file in place
+	const fresh = Buffer.alloc(500, 9);
+	fs.writeFileSync(path.join(alpha, "tiddlers", "report.pdf"), fresh);
+	fs.writeFileSync(path.join(alpha, "tiddlers", "report.pdf.meta"), "title: Report\ntype: application/pdf\ntw-desk-update-of: files/report.pdf\n");
+	fs.unlinkSync(path.join(alpha, "tiddlers", "report.pdf.tid"));
+	await desk.rowMenu(row, "Apply binary policy now");
+	await expect.poll(() => exists(alpha, "tiddlers", "report.pdf.tid")).toBe(true);
+	await expect.poll(() => fs.readFileSync(path.join(alpha, "files", "report.pdf")).equals(fresh)).toBe(true);
+	const tid = fs.readFileSync(path.join(alpha, "tiddlers", "report.pdf.tid"), "utf8");
+	expect(tid).toContain("_canonical_uri: files/report.pdf");
+	expect(tid).not.toContain("tw-desk-update-of");
+	expect(exists(alpha, "tiddlers", "report.pdf")).toBe(false);
+	await expect(await logText(desk, row)).toContainText("Updated files/report.pdf");
+	const backups = path.join(desk.userData, "backup");
+	const stamps = fs.readdirSync(backups);
+	expect(stamps.some(s => exists(backups, s, path.basename(alpha), "files", "report.pdf"))).toBe(true);
+	expect(stamps.some(s => exists(backups, s, path.basename(alpha), "files", "photo.png"))).toBe(true);
+
+	// Switching the policy away and back forgets the record: the next run only records
+	await desk.rowMenu(row, "Edit…");
+	await form.locator("[name=binaryPolicy]").selectOption("leave");
+	await page.locator("#save-dialog").click();
+	await expect(page.locator("#wiki-dialog")).not.toBeVisible();
+	await desk.rowMenu(row, "Edit…");
+	await form.locator("[name=binaryPolicy]").selectOption("externalize");
+	await page.locator("#save-dialog").click();
+	await expect(page.locator("#wiki-dialog")).not.toBeVisible();
+	for (const name of fs.readdirSync(path.join(alpha, "tiddlers")).filter(n => n.endsWith(".tid") && n !== "Hello.tid")) {
+		fs.unlinkSync(path.join(alpha, "tiddlers", name));
+	}
+	await desk.rowMenu(row, "Apply binary policy now");
+	// The run before updated one file; this one does nothing
+	await expect.poll(async () => (await desk.wikiState("Alpha")).binaryScan.lastResult.done.length).toBe(0);
+	expect((await desk.wikiState("Alpha")).binaryScan.lastResult.deleted).toEqual([]);
+	expect(filesIn(alpha)).toEqual(["report.pdf"]);
+	await expect(await logText(desk, row)).not.toContainText("Deleted files/report.pdf");
+});
+
+test("binaries: guard asks before deleting many files", async ({ desk }) => {
+	const alpha = desk.wiki("alpha");
+	const names = Array.from({ length: 12 }, (_, i) => "img" + String(i + 1).padStart(2, "0") + ".png");
+	const putAll = () => names.forEach((name, i) => putBinary(alpha, name, "Image " + (i + 1), 100 + i));
+	const dropTids = () => names.forEach(name => fs.unlinkSync(path.join(alpha, "tiddlers", name + ".tid")));
+	putAll();
+	const page = await desk.launch({ wikis: [{ name: "Alpha", path: alpha, binaries: EXTERNALIZE }] });
+	const row = desk.row("Alpha");
+	const chip = row.locator(".binary-chip");
+	await expect.poll(() => filesIn(alpha).length).toBe(12);
+
+	// More than 10 at once: nothing is deleted, the chip asks
+	dropTids();
+	await desk.rowMenu(row, "Apply binary policy now");
+	await expect(chip).toHaveText("▣ 12 files to delete");
+	expect(filesIn(alpha).length).toBe(12);
+	await expect(await logText(desk, row)).toContainText("Not deleting 12 unused files: more than 10 at once – use ⋯ › Delete 12 unused files…");
+	await expect(chip).toHaveAttribute("title", /Files to delete \(needs your OK\): 12/);
+
+	// confirm() is answered with OK by the fixture
+	await desk.takeDialogs();
+	await desk.rowMenu(row, "Delete 12 unused files…");
+	await expect.poll(() => filesIn(alpha)).toEqual([]);
+	await expect(chip).toHaveCount(0);
+	const [question] = await desk.takeDialogs();
+	expect(question.type).toBe("confirm");
+	expect(question.message).toContain("files/img01.png");
+	expect(question.message).toContain("files/img12.png");
+	expect(question.message).not.toContain("…and");
+
+	// Again, but keep them: the chip goes, the files stay and count as unused
+	putAll();
+	await desk.rowMenu(row, "Apply binary policy now");
+	await expect.poll(() => filesIn(alpha).length).toBe(12);
+	await expect(chip).toHaveCount(0);
+	dropTids();
+	await desk.rowMenu(row, "Apply binary policy now");
+	await expect(chip).toHaveText("▣ 12 files to delete");
+	await desk.rowMenu(row, "Keep these files");
+	await expect(chip).toHaveCount(0);
+	expect(filesIn(alpha).length).toBe(12);
+	expect(await desk.takeDialogs()).toEqual([]);
+	// Shown in the tooltip of the next chip (an embedded binary found by a scan)
+	putBinary(alpha, "extra.png", "Extra");
+	await page.evaluate(id => window.twDesk.binaries.scan(id), (await desk.wikiState("Alpha")).id);
+	await expect(chip).toHaveText("▣ 1 embedded · 100 B");
+	await expect(chip).toHaveAttribute("title", /Unused files in files\/: 12 \(never deleted automatically\)/);
+});

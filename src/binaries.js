@@ -666,7 +666,7 @@ function markerTarget(folder, fields, sha256, title, run) {
 		return Object.assign(numberedName(folder, renamed, sha256, blocked), { replaced: null, reason: "marker" });
 	}
 	if (run.taken(name, title)) {
-		return Object.assign(numberedName(folder, name, sha256, blocked), { replaced: null, reason: "shared" });
+		return Object.assign(numberedName(folder, name, sha256, blocked), { replaced: null, reason: "shared", wanted: name });
 	}
 	const file = pathIn(path.join(folder, "files"), name);
 	if (!lexists(file)) {
@@ -738,7 +738,12 @@ function externalize(folder, item, run) {
 	if (!chosen.reason) {
 		return { action: "externalized", bytes: bytes.length };
 	}
-	return { action: "updated", bytes: bytes.length, name, replaced: chosen.replaced, backup, reason: chosen.reason };
+	const done = { action: "updated", bytes: bytes.length, name, replaced: chosen.replaced, backup, reason: chosen.reason };
+	// "shared": the name the marker asked for, still used by another tiddler
+	if (chosen.wanted) {
+		done.wanted = chosen.wanted;
+	}
+	return done;
 }
 
 function internalize(folder, item) {

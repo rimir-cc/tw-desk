@@ -265,9 +265,13 @@ function binaryChip(wiki) {
 	const policy = wiki.binaries.policy;
 	const embedded = scan.embedded;
 	const missing = scan.externalized.missing;
+	const pending = (scan.pending || []).length;
+	const unused = scan.unused || 0;
 	let text;
 	if (embedded.count > 0) {
 		text = "▣ " + embedded.count + " embedded · " + formatBytes(embedded.bytes);
+	} else if (pending > 0) {
+		text = "▣ " + pending + (pending === 1 ? " file to delete" : " files to delete");
 	} else if (missing > 0) {
 		text = "▣ " + missing + (missing === 1 ? " file missing" : " files missing");
 	} else {
@@ -276,6 +280,8 @@ function binaryChip(wiki) {
 	const lines = [
 		"Binary tiddlers stored in tiddlers/: " + embedded.count + " (" + formatBytes(embedded.bytes) + ")",
 		"Externalized into files/: " + scan.externalized.count + " (" + formatBytes(scan.externalized.bytes) + ")" + (missing ? ", " + missing + " missing" : ""),
+		...(pending ? ["Files to delete (needs your OK): " + pending] : []),
+		...(unused ? ["Unused files in files/: " + unused + " (never deleted automatically)"] : []),
 		"In included folders (embedded): " + scan.includes.embedded.count + " (" + formatBytes(scan.includes.embedded.bytes) + ")",
 		"Policy: " + BINARY_POLICY_TEXT[policy]
 	];
@@ -287,7 +293,9 @@ function binaryChip(wiki) {
 	}
 	const last = scan.lastResult;
 	if (last) {
-		lines.push("Last run: " + last.done.length + " moved, " + last.skipped.length + " skipped, " + last.errors.length + " failed");
+		const updated = last.done.filter(d => d.action === "updated").length;
+		const deleted = (last.deleted || []).length;
+		lines.push("Last run: " + (last.done.length - updated) + " moved, " + updated + " updated, " + deleted + " deleted, " + last.skipped.length + " skipped, " + last.errors.length + " failed");
 		for (const skip of last.skipped.slice(0, 5)) {
 			lines.push("  \u201c" + skip.title + "\u201d skipped: " + skip.reason);
 		}
@@ -295,8 +303,37 @@ function binaryChip(wiki) {
 			lines.push("  \u201c" + error.title + "\u201d not moved: " + error.message);
 		}
 	}
-	const warn = (embedded.count > 0 && policy === "externalize") || missing > 0;
+	const warn = (embedded.count > 0 && policy === "externalize") || pending > 0 || missing > 0;
 	return Object.assign(document.createElement("span"), { className: "git-chip binary-chip" + (warn ? " warn" : ""), textContent: text, title: lines.join("\n") });
+}
+
+// Menu entries for the files a run held back (needs the user's OK), none when there are none
+function pendingFilesMenu(wiki, busy) {
+	const names = (wiki.binaryScan && wiki.binaryScan.pending) || [];
+	if (!names.length) {
+		return [];
+	}
+	const n = names.length;
+	const why = busy ? "Stop the wiki first" : "";
+	return [
+		{
+			label: "Delete " + n + (n === 1 ? " unused file\u2026" : " unused files\u2026"),
+			action: () => run(async () => {
+				const shown = names.slice(0, 20).map(name => "files/" + name);
+				if (n > 20) {
+					shown.push("\u2026and " + (n - 20) + " more");
+				}
+				const question = "Delete " + n + (n === 1 ? " file" : " files") + " no tiddler uses any more?\n\n" + shown.join("\n")
+					+ "\n\nFiles git doesn't hold are moved to TW Desk's backup folder.";
+				if (confirm(question)) {
+					await api.binaries.deleteUnused(wiki.id, names);
+				}
+			}),
+			disabled: busy,
+			title: why || "Delete these files from files/"
+		},
+		{ label: "Keep these files", action: () => run(() => api.binaries.keep(wiki.id)), disabled: busy, title: why || "Keep the files; they won't be offered for deletion again" }
+	];
 }
 
 // The "⋯" menu and right-click menu of a wiki row; index and count: its position within its group
@@ -326,6 +363,7 @@ function wikiMenu(wiki, index, count) {
 			disabled: busy || wiki.binaries.policy === "leave",
 			title: busy ? "Stop the wiki first" : wiki.binaries.policy === "leave" ? "The policy is \u201cleave as is\u201d" : "Move binary tiddlers as the policy says"
 		},
+		...pendingFilesMenu(wiki, busy),
 		{ label: "Copy…", action: act(() => openCreateWizard("copy", wiki)), title: "Create a new wiki as a copy of this one" },
 		"-",
 		{ label: "Move up", action: act(() => api.moveWiki(wiki.id, -1)), disabled: index === 0 },

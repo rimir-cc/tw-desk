@@ -216,6 +216,16 @@ test("committedFiles: tracked and unchanged only", { skip }, async () => {
 	assert.deepEqual([...await git.committedFiles(plain)], []);
 });
 
+test("committedFiles: assume-unchanged and skip-worktree don't count", { skip }, async () => {
+	const wiki = folder("cf-flags");
+	writeFiles(wiki, { "files/a.png": "a", "files/b.png": "b", "files/c.png": "c" });
+	await git.init(wiki);
+	sh(wiki, "update-index", "--assume-unchanged", "files/a.png");
+	sh(wiki, "update-index", "--skip-worktree", "files/b.png");
+	writeFiles(wiki, { "files/a.png": "changed", "files/b.png": "changed" });
+	assert.deepEqual([...await git.committedFiles(wiki)], ["c.png"]);
+});
+
 test("committedFiles: wiki folder inside a larger repository", { skip }, async () => {
 	const root = path.join(dir, "cf-root");
 	const wiki = path.join(root, "wikis", "cf");

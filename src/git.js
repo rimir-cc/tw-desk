@@ -199,12 +199,17 @@ async function init(folder) {
 	await git(folder, ["commit", "--quiet", "-m", "TW Desk: initial commit"]);
 }
 
-// Names (relative to <folder>/files, as git prints them) of files that are tracked and unchanged against HEAD.
+// Names (relative to <folder>/files, as git prints them) of files that are tracked and unchanged against HEAD
+// (not flagged assume-unchanged or skip-worktree).
 // Any error (no repository, no commits, no git) gives an empty set.
 async function committedFiles(folder) {
 	try {
 		const split = output => output.split("\0").filter(Boolean);
-		const tracked = split(await git(folder, ["ls-files", "-z", "--", "files/"]));
+		// "-v" tags each entry: lower case = assume-unchanged, "S" = skip-worktree; git doesn't look at those files,
+		// so it can't vouch for them
+		const tracked = split(await git(folder, ["ls-files", "-v", "-z", "--", "files/"]))
+			.filter(entry => /^[A-Z] /.test(entry) && !entry.startsWith("S "))
+			.map(entry => entry.slice(2));
 		const changed = new Set(split(await git(folder, ["diff", "--name-only", "-z", "--relative", "HEAD", "--", "files/"])));
 		return new Set(tracked.filter(f => !changed.has(f)).map(f => f.replace(/^files\//, "")));
 	} catch (e) {

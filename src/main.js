@@ -882,9 +882,9 @@ function scanWikiBinaries(wiki) {
 	binaryScans.set(wiki.id, summary);
 }
 
-// Scans of the wiki's existing includes
+// Scans of the wiki's existing includes (an included wiki may have no tiddlers/, like TiddlyWiki's empty edition)
 function includeScans(wiki) {
-	return readIncludes(wiki.path).includes.filter(i => i.exists).map(i => binaries.scanFolder(i.resolved, { caseInsensitive: CASE_INSENSITIVE_PATHS }));
+	return readIncludes(wiki.path).includes.filter(i => i.exists).map(i => binaries.scanFolder(i.resolved, { optional: true, caseInsensitive: CASE_INSENSITIVE_PATHS }));
 }
 
 // References to the wiki's files/ from outside its tiddlers/: its includes and its plugins/ folder, merged into
@@ -896,6 +896,11 @@ function outsideReferences(wiki, included = includeScans(wiki)) {
 		// Unknown includes could refer to any file
 		outside.complete = false;
 		outside.problems.push(info.infoError);
+	}
+	for (const missing of (info.includes || []).filter(i => !i.exists)) {
+		// An offline drive: what it refers to is unknown
+		outside.complete = false;
+		outside.problems.push("Included folder not found: " + missing.resolved);
 	}
 	const own = binaries.scanFolder(path.resolve(wiki.path), { sub: "plugins", optional: true, caseInsensitive: CASE_INSENSITIVE_PATHS });
 	for (const scan of included.concat(own)) {
@@ -937,7 +942,7 @@ function writeRecord(wiki, inUse, pending) {
 	const file = recordFile(wiki.id);
 	fs.mkdirSync(path.dirname(file), { recursive: true });
 	const temp = file + ".tmp";
-	fs.writeFileSync(temp, JSON.stringify({ folder: folderKey(wiki.path), inUse, pending }, null, 2));
+	binaries.writeSynced(temp, JSON.stringify({ folder: folderKey(wiki.path), inUse, pending }, null, 2));
 	fs.renameSync(temp, file);
 }
 
@@ -1026,7 +1031,9 @@ function logBinaryResult(wiki, policy, result, hadRecord) {
 		binaryLog(wiki.id, "Binary tiddler \u201c" + skip.title + "\u201d skipped: " + skip.reason);
 	}
 	for (const error of result.errors) {
-		binaryLog(wiki.id, "Binary tiddler \u201c" + error.title + "\u201d not moved: " + error.message);
+		binaryLog(wiki.id, error.file
+			? "Could not delete files/" + error.file + ": " + error.message
+			: "Binary tiddler \u201c" + error.title + "\u201d not moved: " + error.message);
 	}
 }
 
@@ -1099,7 +1106,9 @@ function applyBinaryPolicy(wiki, extra = {}) {
 				hadRecord = !!record;
 				const stamp = new Date().toISOString().replace(/[:.]/g, "-");
 				Object.assign(options, {
-					record: record ? record.inUse.concat(record.pending) : null,
+					// Held-back names go separately: they're only deleted when the user confirms
+					record: record ? record.inUse : null,
+					pending: record ? record.pending : [],
 					gitHas,
 					backupDir: path.join(app.getPath("userData"), "backup", stamp, path.basename(folder), "files"),
 					outside: outsideReferences(current)

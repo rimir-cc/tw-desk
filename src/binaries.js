@@ -178,7 +178,8 @@ function fileNameOfUri(uri) {
 	if (typeof uri !== "string" || isExternalUri(uri)) {
 		return null;
 	}
-	const decoded = decodeUri(uri).replace(/\\/g, "/");
+	// TW's /files/ route matches only the path: a raw ?query or #fragment isn't part of the name
+	const decoded = decodeUri(uri.replace(/[?#].*$/s, "")).replace(/\\/g, "/");
 	if (decoded.includes("\0") || isExternalUri(decoded)) {
 		return null;
 	}
@@ -866,7 +867,8 @@ function runContext(scan, options) {
 		caseInsensitive,
 		references,
 		complete: scan.complete && (!outside || outside.complete),
-		record: options.record ? new Set(options.record.filter(n => typeof n === "string").map(n => nameKey(n, caseInsensitive))) : null,
+		// Names recorded at the previous run, held-back ones included
+		record: options.record ? new Set(options.record.concat(Array.isArray(options.pending) ? options.pending : []).filter(n => typeof n === "string").map(n => nameKey(n, caseInsensitive))) : null,
 		gitHas: options.gitHas || new Set(),
 		backupDir: options.backupDir || null,
 		// nameKeys written or reused in this run: never overwritten implicitly afterwards
@@ -948,8 +950,10 @@ function uniqueNames(names, caseInsensitive) {
 }
 
 // After updates and moves: deletes the files in files/ that were in use at the previous run (options.record) and
-// aren't referenced any more, unless the scan is incomplete or the mass-deletion guard holds them back. Returns
-// { deleted, pending, guard, incomplete, record } with the new record to write; failed deletes go to errors.
+// aren't referenced any more, unless the scan is incomplete or the mass-deletion guard holds them back. Names held
+// back before (options.pending) are never deleted on their own: they wait for options.confirmDelete, or leave
+// pending when referenced again or gone. Returns { deleted, pending, guard, incomplete, record } with the new record
+// to write (record holds the pending names too); failed deletes go to errors.
 function deleteUnused(folder, options, run, errors) {
 	const caseInsensitive = run.caseInsensitive;
 	const after = scanFolder(folder, { caseInsensitive });
@@ -961,34 +965,42 @@ function deleteUnused(folder, options, run, errors) {
 	const problems = after.problems.concat(outside ? outside.problems : []);
 	const complete = after.complete && (!outside || outside.complete);
 	const out = { deleted: [], pending: [], guard: null, incomplete: complete ? null : problems[0] || "scan incomplete", record: null };
-	if (!options.record) {
-		out.record = uniqueNames(referenced, caseInsensitive);
-		return out;
-	}
 	// Only names that stay inside files/ ("a/../b", absolute paths and non-strings are dropped)
-	const old = uniqueNames(options.record.filter(n => typeof n === "string" && fileNameOfUri(uriFor(n)) === n), caseInsensitive);
-	if (!complete) {
-		out.record = uniqueNames(referenced.concat(old), caseInsensitive);
+	const valid = list => uniqueNames((Array.isArray(list) ? list : []).filter(n => typeof n === "string" && fileNameOfUri(uriFor(n)) === n), caseInsensitive);
+	const unused = name => !inUse.has(nameKey(name, caseInsensitive));
+	const heldKeys = new Set(valid(options.pending).map(n => nameKey(n, caseInsensitive)));
+	const old = valid(options.record).filter(n => !heldKeys.has(nameKey(n, caseInsensitive)));
+	const held = valid(options.pending);
+	const finish = inUseNames => {
+		out.pending = uniqueNames(out.pending, caseInsensitive);
+		const pendingKeys = new Set(out.pending.map(n => nameKey(n, caseInsensitive)));
+		out.record = uniqueNames(inUseNames.filter(n => !pendingKeys.has(nameKey(n, caseInsensitive))).concat(out.pending), caseInsensitive);
 		return out;
+	};
+	if (!options.record || !complete) {
+		// Nothing is deleted; held-back names keep waiting unless something refers to them again
+		out.pending = held.filter(unused);
+		return finish(options.record ? referenced.concat(old) : referenced);
 	}
 	const filesDir = path.join(folder, "files");
 	// Entries whose file is missing or isn't a regular file in files/ are dropped from the record
-	const present = old.filter(name => regularInFiles(folder, pathIn(filesDir, name)));
-	const candidates = present.filter(name => !inUse.has(nameKey(name, caseInsensitive)));
-	let toDelete = candidates;
+	const present = name => regularInFiles(folder, pathIn(filesDir, name));
+	const presentOld = old.filter(present);
+	const candidates = presentOld.filter(unused);
+	const waiting = held.filter(present).filter(unused);
+	let toDelete = [];
 	if (Array.isArray(options.confirmDelete)) {
 		const confirmed = new Set(options.confirmDelete.filter(n => typeof n === "string").map(n => nameKey(n, caseInsensitive)));
-		toDelete = candidates.filter(name => confirmed.has(nameKey(name, caseInsensitive)));
+		toDelete = candidates.concat(waiting).filter(name => confirmed.has(nameKey(name, caseInsensitive)));
 	} else if (candidates.length > 10) {
 		out.guard = { reason: "many", count: candidates.length };
-	} else if (candidates.length > 0 && candidates.length === present.length && present.length >= 3) {
+	} else if (candidates.length > 0 && candidates.length === presentOld.length && presentOld.length >= 3) {
 		out.guard = { reason: "all", count: candidates.length };
-	}
-	if (out.guard) {
-		toDelete = [];
+	} else {
+		toDelete = candidates;
 	}
 	const deleting = new Set(toDelete);
-	out.pending = candidates.filter(name => !deleting.has(name));
+	out.pending = candidates.concat(waiting).filter(name => !deleting.has(name));
 	for (const name of toDelete) {
 		const file = pathIn(filesDir, name);
 		try {
@@ -1005,13 +1017,11 @@ function deleteUnused(folder, options, run, errors) {
 			}
 			out.deleted.push({ name, backup });
 		} catch (e) {
-			errors.push({ title: "files/" + name, message: e.message });
+			errors.push({ title: "files/" + name, file: name, message: e.message });
 			out.pending.push(name);
 		}
 	}
-	out.pending.sort();
-	out.record = uniqueNames(referenced.concat(out.pending), caseInsensitive);
-	return out;
+	return finish(referenced);
 }
 
-module.exports = { BASE64_TYPES, extensionFor, fileNameFor, typeForExtension, parseFields, serializeFields, fieldsSafe, scanFolder, nameKey, fileNameOfUri, listFiles, MARKER, applyPolicy, backupFile, removeTempFiles };
+module.exports = { BASE64_TYPES, extensionFor, fileNameFor, typeForExtension, parseFields, serializeFields, fieldsSafe, scanFolder, nameKey, fileNameOfUri, listFiles, MARKER, applyPolicy, backupFile, removeTempFiles, writeSynced };

@@ -300,7 +300,7 @@ function binaryChip(wiki) {
 			lines.push("  \u201c" + skip.title + "\u201d skipped: " + skip.reason);
 		}
 		for (const error of last.errors.slice(0, 5)) {
-			lines.push("  \u201c" + error.title + "\u201d not moved: " + error.message);
+			lines.push(error.file ? "  Could not delete files/" + error.file + ": " + error.message : "  \u201c" + error.title + "\u201d not moved: " + error.message);
 		}
 	}
 	const warn = (embedded.count > 0 && policy === "externalize") || pending > 0 || missing > 0;

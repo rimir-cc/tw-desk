@@ -494,6 +494,10 @@ test("fileNameOfUri and nameKey", () => {
 	assert.equal(binaries.fileNameOfUri("files/a%23b.png"), "a#b.png");
 	assert.equal(binaries.fileNameOfUri("files\\sub\\x.pdf"), "sub/x.pdf");
 	assert.equal(binaries.fileNameOfUri("./files/x.pdf"), "x.pdf");
+	// TiddlyWiki's /files/ route only looks at the path
+	assert.equal(binaries.fileNameOfUri("files/x.png?v=2"), "x.png");
+	assert.equal(binaries.fileNameOfUri("files/r.pdf#page=3"), "r.pdf");
+	assert.equal(binaries.fileNameOfUri("files/a%3Fb.png?x#y"), "a?b.png");
 	for (const bad of ["files/", "files/../x", "other/x", "/files/x", "file:///x", "files/a\0b"]) {
 		assert.equal(binaries.fileNameOfUri(bad), null, bad);
 	}
@@ -823,6 +827,7 @@ test("delete: without a backup folder the file stays pending", () => {
 	assert.deepEqual(result.pending, ["b.png"]);
 	assert.equal(result.errors.length, 1);
 	assert.equal(result.errors[0].title, "files/b.png");
+	assert.equal(result.errors[0].file, "b.png");
 	assert.equal(exists("files/b.png"), true);
 	assert.deepEqual(result.record, ["a.png", "b.png"]);
 });
@@ -921,6 +926,77 @@ test("delete: guard – every file in use", () => {
 	assert.equal(result.guard, null);
 	assert.deepEqual(result.deleted.map(d => d.name), ["a.png", "b.png"]);
 	assert.deepEqual(result.record, []);
+});
+
+// One policy run as main.js does it: record = { inUse, pending } in, the new record out
+function runAsMain(record, extra = {}) {
+	const result = binaries.applyPolicy(dir, "externalize", Object.assign({ record: record.inUse, pending: record.pending, backupDir: backupOf(), caseInsensitive: false }, extra));
+	const pending = new Set(result.pending);
+	return { result, record: { inUse: result.record.filter(n => !pending.has(n)), pending: result.pending } };
+}
+
+test("delete: held-back files are never deleted without the user's OK", () => {
+	for (const name of ["a.png", "b.png", "c.png"]) {
+		put("files/" + name, name);
+	}
+	put("tiddlers/other.tid", "title: other\n\n");
+	// Run 1: every file lost its tiddler → guard
+	let run = runAsMain({ inUse: ["a.png", "b.png", "c.png"], pending: [] });
+	assert.deepEqual(run.result.guard, { reason: "all", count: 3 });
+	assert.deepEqual(run.record, { inUse: [], pending: ["a.png", "b.png", "c.png"] });
+	// Run 2: the user adds a binary
+	put("files/n.png", "n");
+	putExt("n", "n.png");
+	run = runAsMain(run.record);
+	assert.deepEqual(run.result.deleted, []);
+	assert.deepEqual(run.record, { inUse: ["n.png"], pending: ["a.png", "b.png", "c.png"] });
+	// Run 3: unchanged – the held-back files still wait
+	run = runAsMain(run.record);
+	assert.deepEqual(run.result.deleted, []);
+	assert.equal(run.result.guard, null);
+	assert.deepEqual(run.record, { inUse: ["n.png"], pending: ["a.png", "b.png", "c.png"] });
+	for (const name of ["a.png", "b.png", "c.png"]) {
+		assert.equal(exists("files/" + name), true, name);
+	}
+	// Confirmed: deleted; referenced again: back in use
+	putExt("b", "b.png");
+	run = runAsMain(run.record, { confirmDelete: ["a.png"] });
+	assert.deepEqual(run.result.deleted.map(d => d.name), ["a.png"]);
+	assert.deepEqual(run.record, { inUse: ["b.png", "n.png"], pending: ["c.png"] });
+	assert.equal(exists("files/a.png"), false);
+	// A pending file removed by hand leaves the record
+	fs.rmSync(path.join(dir, "files", "c.png"));
+	run = runAsMain(run.record);
+	assert.deepEqual(run.record, { inUse: ["b.png", "n.png"], pending: [] });
+});
+
+test("delete: guard – restoring some of many doesn't delete the rest", () => {
+	const names = Array.from({ length: 12 }, (_, i) => "f" + String(i).padStart(2, "0") + ".png");
+	for (const name of names) {
+		put("files/" + name, name);
+	}
+	put("files/kept.png", "k");
+	putExt("kept", "kept.png");
+	let run = runAsMain({ inUse: names.concat("kept.png"), pending: [] });
+	assert.deepEqual(run.result.guard, { reason: "many", count: 12 });
+	assert.deepEqual(run.record.pending, names);
+	putExt("r0", "f00.png");
+	putExt("r1", "f01.png");
+	run = runAsMain(run.record);
+	assert.deepEqual(run.result.deleted, []);
+	assert.equal(fs.readdirSync(path.join(dir, "files")).length, 13);
+	assert.deepEqual(run.record, { inUse: ["f00.png", "f01.png", "kept.png"], pending: names.slice(2) });
+});
+
+test("delete: pending survives incomplete and first runs", () => {
+	putAB();
+	put("tiddlers/bundle/tiddlywiki.files", "{}");
+	let run = runAsMain({ inUse: ["a.png"], pending: ["b.png"] });
+	assert.ok(run.result.incomplete);
+	assert.deepEqual(run.record, { inUse: ["a.png"], pending: ["b.png"] });
+	const first = binaries.applyPolicy(dir, "externalize", { pending: ["b.png"], backupDir: backupOf() });
+	assert.deepEqual(first.pending, ["b.png"]);
+	assert.equal(exists("files/b.png"), true);
 });
 
 test("delete: missing, directory and symlink entries are left alone", t => {

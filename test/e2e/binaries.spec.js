@@ -116,6 +116,35 @@ test("binaries: an included wiki is only reported", async ({ desk }) => {
 	await expect(desk.row("Shared").locator(".binary-chip")).toHaveText("▣ 1 embedded · 100 B");
 });
 
+test("binaries: includes without tiddlers/ and missing includes", async ({ desk }) => {
+	const alpha = desk.wiki("alpha");
+	// Like TiddlyWiki's empty edition: only tiddlywiki.info
+	const empty = path.join(desk.wikisDir, "empty");
+	fs.mkdirSync(empty, { recursive: true });
+	fs.writeFileSync(path.join(empty, "tiddlywiki.info"), "{}");
+	const infoFile = path.join(alpha, "tiddlywiki.info");
+	const info = JSON.parse(fs.readFileSync(infoFile, "utf8"));
+	info.includeWikis = ["../empty"];
+	fs.writeFileSync(infoFile, JSON.stringify(info, null, 4));
+	putBinary(alpha, "photo.png", "Photo");
+	putBinary(alpha, "other.png", "Other", 120);
+	await desk.launch({ wikis: [{ name: "Alpha", path: alpha, binaries: EXTERNALIZE }] });
+	const row = desk.row("Alpha");
+	await expect.poll(() => filesIn(alpha)).toEqual(["other.png", "photo.png"]);
+
+	// The empty include doesn't make the scan incomplete
+	fs.unlinkSync(path.join(alpha, "tiddlers", "photo.png.tid"));
+	await desk.rowMenu(row, "Apply binary policy now");
+	await expect.poll(() => exists(alpha, "files", "photo.png")).toBe(false);
+
+	// A missing include (offline drive): nothing is deleted
+	fs.rmSync(empty, { recursive: true });
+	fs.unlinkSync(path.join(alpha, "tiddlers", "other.png.tid"));
+	await desk.rowMenu(row, "Apply binary policy now");
+	await expect(await logText(desk, row)).toContainText("No files deleted: Included folder not found: " + empty);
+	expect(exists(alpha, "files", "other.png")).toBe(true);
+});
+
 function putFile(folder, name, title, type, bytes) {
 	fs.writeFileSync(path.join(folder, "tiddlers", name), bytes);
 	fs.writeFileSync(path.join(folder, "tiddlers", name + ".meta"), "title: " + title + "\ntype: " + type + "\n");
@@ -206,16 +235,31 @@ test("binaries: guard asks before deleting many files", async ({ desk }) => {
 	await expect(await logText(desk, row)).toContainText("Not deleting 12 unused files: more than 10 at once – use ⋯ › Delete 12 unused files…");
 	await expect(chip).toHaveAttribute("title", /Files to delete \(needs your OK\): 12/);
 
+	// Two tiddlers come back: they're in use again, the other 10 still wait (no guard holds them now)
+	const restored = ["img01.png", "img02.png"];
+	restored.forEach((name, i) => fs.writeFileSync(path.join(alpha, "tiddlers", name + ".tid"), "title: Image " + (i + 1) + "\ntype: image/png\n_canonical_uri: files/" + name + "\n"));
+	await desk.rowMenu(row, "Apply binary policy now");
+	await expect(chip).toHaveText("▣ 10 files to delete");
+	await desk.rowMenu(row, "Apply binary policy now");
+	await expect.poll(async () => (await desk.wikiState("Alpha")).binaryScan.lastResult.pending.length).toBe(10);
+	expect(filesIn(alpha).length).toBe(12);
+	await expect(chip).toHaveText("▣ 10 files to delete");
+
 	// confirm() is answered with OK by the fixture
 	await desk.takeDialogs();
-	await desk.rowMenu(row, "Delete 12 unused files…");
-	await expect.poll(() => filesIn(alpha)).toEqual([]);
+	await desk.rowMenu(row, "Delete 10 unused files…");
+	await expect.poll(() => filesIn(alpha)).toEqual(restored);
 	await expect(chip).toHaveCount(0);
 	const [question] = await desk.takeDialogs();
 	expect(question.type).toBe("confirm");
-	expect(question.message).toContain("files/img01.png");
+	expect(question.message).toContain("files/img03.png");
 	expect(question.message).toContain("files/img12.png");
+	expect(question.message).not.toContain("files/img01.png");
 	expect(question.message).not.toContain("…and");
+	for (const name of restored) {
+		fs.unlinkSync(path.join(alpha, "tiddlers", name + ".tid"));
+		fs.unlinkSync(path.join(alpha, "files", name));
+	}
 
 	// Again, but keep them: the chip goes, the files stay and count as unused
 	putAll();

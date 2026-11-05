@@ -149,24 +149,106 @@ function readMeta(file) {
 	}
 }
 
-function jsonHasBinary(file) {
+// Tiddlers of a .json file, or null when it can't be read or parsed
+function readJsonTiddlers(file) {
 	try {
 		const data = JSON.parse(fs.readFileSync(file, "utf8"));
-		return (Array.isArray(data) ? data : [data]).some(t => t && typeof t === "object"
-			&& BASE64_TYPES.has(t.type) && !String(t.title).startsWith("$:/"));
+		return (Array.isArray(data) ? data : [data]).filter(t => t && typeof t === "object");
 	} catch (e) {
-		return false;
+		return null;
 	}
 }
 
-function scanFolder(folder) {
+function jsonHasBinary(tiddlers) {
+	return !!tiddlers && tiddlers.some(t => BASE64_TYPES.has(t.type) && !String(t.title).startsWith("$:/"));
+}
+
+// Field written by TW Desk next to a new copy of a file in files/: the old _canonical_uri it replaces
+const MARKER = "tw-desk-update-of";
+
+const defaultCaseInsensitive = () => process.platform === "win32" || process.platform === "darwin";
+
+// The key under which names in files/ are compared
+function nameKey(name, caseInsensitive = defaultCaseInsensitive()) {
+	return caseInsensitive ? name.toLowerCase() : name;
+}
+
+// The name inside files/ that a _canonical_uri points to, "/"-separated; null for anything else
+function fileNameOfUri(uri) {
+	if (typeof uri !== "string" || isExternalUri(uri)) {
+		return null;
+	}
+	const decoded = decodeUri(uri).replace(/\\/g, "/");
+	if (decoded.includes("\0") || isExternalUri(decoded)) {
+		return null;
+	}
+	const normal = path.posix.normalize(decoded);
+	if (!normal.startsWith("files/") || normal.split("/").includes("..")) {
+		return null;
+	}
+	return normal.slice("files/".length) || null;
+}
+
+// Regular files under <folder>/files, relative to it, "/"-separated; no symlinks, directories or temp files
+function listFiles(folder) {
+	const root = path.join(folder, "files");
+	const result = [];
+	function walk(dir, prefix) {
+		let entries;
+		try {
+			entries = fs.readdirSync(dir, { withFileTypes: true });
+		} catch (e) {
+			return;
+		}
+		for (const entry of entries) {
+			if (entry.isDirectory()) {
+				walk(path.join(dir, entry.name), prefix + entry.name + "/");
+			} else if (entry.isFile() && !entry.name.endsWith(TMP)) {
+				result.push(prefix + entry.name);
+			}
+		}
+	}
+	walk(root, "");
+	return result;
+}
+
+function scanFolder(folder, options = {}) {
+	const sub = options.sub || "tiddlers";
+	const caseInsensitive = options.caseInsensitive === undefined ? defaultCaseInsensitive() : options.caseInsensitive;
 	const scan = {
 		folder,
 		embedded: { count: 0, bytes: 0 },
 		externalized: { count: 0, bytes: 0, missing: 0 },
 		items: [],
-		skipped: []
+		skipped: [],
+		references: new Map(),
+		complete: true,
+		problems: []
 	};
+
+	function problem(text) {
+		scan.complete = false;
+		scan.problems.push(text);
+	}
+
+	// The files/ names a tiddler's _canonical_uri and update marker point to
+	function addReferences(fields, title) {
+		for (const field of ["_canonical_uri", MARKER]) {
+			const name = fileNameOfUri(fields[field]);
+			if (name === null) {
+				continue;
+			}
+			const key = nameKey(name, caseInsensitive);
+			let ref = scan.references.get(key);
+			if (!ref) {
+				ref = { name, titles: [] };
+				scan.references.set(key, ref);
+			}
+			if (!ref.titles.includes(title)) {
+				ref.titles.push(title);
+			}
+		}
+	}
 
 	function add(item) {
 		scan.items.push(item);
@@ -180,7 +262,12 @@ function scanFolder(folder) {
 
 	function scanTid(file) {
 		const parsed = readFields(file);
-		if (!parsed || !BASE64_TYPES.has(parsed.fields.type) || !parsed.fields.title
+		if (!parsed) {
+			problem("Can't read " + file);
+			return;
+		}
+		addReferences(parsed.fields, parsed.fields.title || "");
+		if (!BASE64_TYPES.has(parsed.fields.type) || !parsed.fields.title
 			|| parsed.fields.title.startsWith("$:/")) {
 			return;
 		}
@@ -204,12 +291,29 @@ function scanFolder(folder) {
 		}
 	}
 
+	function scanMeta(file, name) {
+		const fields = readMeta(file);
+		if (!fields) {
+			problem("Can't read " + file);
+			return;
+		}
+		addReferences(fields, fields.title || name.slice(0, -".meta".length));
+	}
+
 	function scanFile(file, name) {
 		const ext = path.extname(name).toLowerCase();
 		if (ext === ".tid") {
 			scanTid(file);
 		} else if (ext === ".json") {
-			if (jsonHasBinary(file)) {
+			const tiddlers = readJsonTiddlers(file);
+			if (!tiddlers) {
+				problem("Can't parse " + file);
+				return;
+			}
+			for (const t of tiddlers) {
+				addReferences(t, String(t.title));
+			}
+			if (jsonHasBinary(tiddlers)) {
 				scan.skipped.push({ file, reason: "json" });
 			}
 		} else if (TYPE_OF.has(ext)) {
@@ -225,22 +329,32 @@ function scanFolder(folder) {
 		}
 	}
 
+	const root = path.join(folder, sub);
+	const optional = !!options.optional;
+
 	function walk(dir) {
 		let entries;
 		try {
 			entries = fs.readdirSync(dir, { withFileTypes: true });
 		} catch (e) {
+			if (!(optional && dir === root && e.code === "ENOENT")) {
+				problem("Can't read " + dir);
+			}
 			return;
 		}
 		if (entries.some(e => e.name === "tiddlywiki.files")) {
 			scan.skipped.push({ file: dir, reason: "tiddlywiki.files" });
+			problem("Skipped " + dir + " (tiddlywiki.files)");
 			return;
 		}
 		for (const entry of entries.sort((a, b) => (a.name < b.name ? -1 : 1))) {
+			const full = path.join(dir, entry.name);
+			if (entry.isFile() && entry.name.endsWith(".meta")) {
+				scanMeta(full, entry.name);
+			}
 			if (EXCLUDE.test(entry.name)) {
 				continue;
 			}
-			const full = path.join(dir, entry.name);
 			if (entry.isDirectory()) {
 				walk(full);
 			} else if (entry.isFile()) {
@@ -249,7 +363,7 @@ function scanFolder(folder) {
 		}
 	}
 
-	walk(path.join(folder, "tiddlers"));
+	walk(root);
 	return scan;
 }
 
@@ -587,4 +701,4 @@ function applyPolicy(folder, policy) {
 	return result;
 }
 
-module.exports = { BASE64_TYPES, extensionFor, fileNameFor, typeForExtension, parseFields, serializeFields, fieldsSafe, scanFolder, applyPolicy, removeTempFiles };
+module.exports = { BASE64_TYPES, extensionFor, fileNameFor, typeForExtension, parseFields, serializeFields, fieldsSafe, scanFolder, nameKey, fileNameOfUri, listFiles, MARKER, applyPolicy, removeTempFiles };

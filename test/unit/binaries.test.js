@@ -440,3 +440,48 @@ test("applyPolicy: TiddlyWiki loads the same fields after externalize and intern
 	assert.deepEqual(binaries.applyPolicy(wiki, "internalize").errors, []);
 	assert.deepEqual(tw.loadTiddler(wiki, "Photo"), before);
 });
+
+test("references: .tid, .meta and .json, any type", () => {
+	put("tiddlers/a.tid", "title: A\ntype: image/png\n_canonical_uri: files/a.png\n\n");
+	put("tiddlers/b.png", Buffer.alloc(3));
+	put("tiddlers/b.png.meta", "title: B\ntype: image/png\ntw-desk-update-of: files/old%20b.png\n");
+	put("tiddlers/c.json", JSON.stringify([{ title: "C", type: "text/vnd.tiddlywiki", _canonical_uri: "files/sub/c.txt" }]));
+	put("tiddlers/d.tid", "title: D\n_canonical_uri: https://example.com/files/x.png\n\n");
+	put("tiddlers/e.tid", "title: E\n_canonical_uri: files/../tiddlers/x.png\n\n");
+	const scan = binaries.scanFolder(dir);
+	assert.equal(scan.complete, true);
+	assert.deepEqual([...scan.references.values()].map(r => [r.name, r.titles]).sort(),
+		[["a.png", ["A"]], ["old b.png", ["B"]], ["sub/c.txt", ["C"]]]);
+});
+
+test("references: incomplete scans", () => {
+	assert.equal(binaries.scanFolder(dir).complete, false); // no tiddlers/
+	assert.equal(binaries.scanFolder(dir, { sub: "plugins", optional: true }).complete, true);
+	put("tiddlers/ok.tid", "title: ok\n\n");
+	put("tiddlers/bundle/tiddlywiki.files", "{}");
+	const scan = binaries.scanFolder(dir);
+	assert.equal(scan.complete, false);
+	assert.match(scan.problems[0], /tiddlywiki\.files/);
+	fs.rmSync(path.join(dir, "tiddlers", "bundle"), { recursive: true });
+	put("tiddlers/broken.json", "{");
+	assert.equal(binaries.scanFolder(dir).complete, false);
+});
+
+test("fileNameOfUri and nameKey", () => {
+	assert.equal(binaries.fileNameOfUri("files/a%23b.png"), "a#b.png");
+	assert.equal(binaries.fileNameOfUri("files\\sub\\x.pdf"), "sub/x.pdf");
+	assert.equal(binaries.fileNameOfUri("./files/x.pdf"), "x.pdf");
+	for (const bad of ["files/", "files/../x", "other/x", "/files/x", "file:///x", "files/a\0b"]) {
+		assert.equal(binaries.fileNameOfUri(bad), null, bad);
+	}
+	assert.equal(binaries.nameKey("A.PNG", true), "a.png");
+	assert.equal(binaries.nameKey("A.PNG", false), "A.PNG");
+});
+
+test("listFiles: regular files only", () => {
+	put("files/a.png", "x");
+	put("files/sub/b.pdf", "x");
+	put("files/c.png.tw-desk-tmp", "x");
+	assert.deepEqual(binaries.listFiles(dir).sort(), ["a.png", "sub/b.pdf"]);
+	assert.deepEqual(binaries.listFiles(path.join(dir, "none")), []);
+});

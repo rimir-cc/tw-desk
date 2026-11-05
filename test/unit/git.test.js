@@ -191,3 +191,40 @@ test("ensureIgnored: files/ stays out of git status", { skip }, async () => {
 	fs.writeFileSync(path.join(wiki, "files", "x.png"), "png");
 	assert.equal(sh(wiki, "status", "--porcelain").includes("files/"), false);
 });
+
+function writeFiles(base, files) {
+	for (const [name, content] of Object.entries(files)) {
+		fs.mkdirSync(path.dirname(path.join(base, name)), { recursive: true });
+		fs.writeFileSync(path.join(base, name), content);
+	}
+}
+
+test("committedFiles: tracked and unchanged only", { skip }, async () => {
+	const wiki = folder("cf");
+	writeFiles(wiki, { "files/a.png": "a", "files/sub/b.png": "b", "files/my pic #1 ä.png": "u" });
+	await git.init(wiki);
+	writeFiles(wiki, { "files/sub/b.png": "changed", "files/c.png": "c", "files/d.png": "d" });
+	sh(wiki, "add", "files/d.png");
+	assert.deepEqual([...await git.committedFiles(wiki)].sort(), ["a.png", "my pic #1 ä.png"]);
+	// no files/ folder
+	const noFiles = folder("cf-nofiles");
+	await git.init(noFiles);
+	assert.deepEqual([...await git.committedFiles(noFiles)], []);
+	// no repository
+	const plain = folder("cf-plain");
+	writeFiles(plain, { "files/a.png": "a" });
+	assert.deepEqual([...await git.committedFiles(plain)], []);
+});
+
+test("committedFiles: wiki folder inside a larger repository", { skip }, async () => {
+	const root = path.join(dir, "cf-root");
+	const wiki = path.join(root, "wikis", "cf");
+	writeFiles(wiki, { "files/a.png": "a", "files/b.png": "b" });
+	writeFiles(root, { "other/files/x.png": "x" });
+	fs.mkdirSync(root, { recursive: true });
+	sh(root, "init", "--quiet");
+	sh(root, "add", "-A");
+	sh(root, "commit", "--quiet", "-m", "init");
+	writeFiles(wiki, { "files/b.png": "changed" });
+	assert.deepEqual([...await git.committedFiles(wiki)], ["a.png"]);
+});

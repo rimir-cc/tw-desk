@@ -199,6 +199,19 @@ async function init(folder) {
 	await git(folder, ["commit", "--quiet", "-m", "TW Desk: initial commit"]);
 }
 
+// Names (relative to <folder>/files, as git prints them) of files that are tracked and unchanged against HEAD.
+// Any error (no repository, no commits, no git) gives an empty set.
+async function committedFiles(folder) {
+	try {
+		const split = output => output.split("\0").filter(Boolean);
+		const tracked = split(await git(folder, ["ls-files", "-z", "--", "files/"]));
+		const changed = new Set(split(await git(folder, ["diff", "--name-only", "-z", "--relative", "HEAD", "--", "files/"])));
+		return new Set(tracked.filter(f => !changed.has(f)).map(f => f.replace(/^files\//, "")));
+	} catch (e) {
+		return new Set();
+	}
+}
+
 // Adds a line to a folder's .gitignore (creates the file). Returns false if the exact line is already there.
 function ensureIgnored(folder, line) {
 	const ignoreFile = path.join(folder, ".gitignore");
@@ -255,4 +268,4 @@ async function clone(url, target, branch) {
 	await git(path.dirname(target), args.concat("--", url, target), 600000);
 }
 
-module.exports = { version, repoRoot, status, fetch, commit, push, pull, init, ensureIgnored, ensureNotIgnored, addRemote, clone };
+module.exports = { version, repoRoot, status, fetch, commit, push, pull, init, committedFiles, ensureIgnored, ensureNotIgnored, addRemote, clone };

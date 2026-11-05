@@ -703,3 +703,28 @@ test("backupFile: subfolders and numbering", () => {
 	assert.equal(exists("files/sub/x.pdf"), false);
 	assert.equal(read("backup/sub/x.pdf").toString("utf8"), "earlier");
 });
+
+test("backupFile: across drives copies, verifies, then deletes", t => {
+	put("files/x.pdf", OLD);
+	const rename = fs.renameSync;
+	let calls = 0;
+	fs.renameSync = (...args) => {
+		calls++;
+		const e = new Error("cross-device link not permitted");
+		e.code = "EXDEV";
+		throw e;
+	};
+	t.after(() => {
+		fs.renameSync = rename;
+	});
+	let target;
+	try {
+		target = binaries.backupFile(path.join(dir, "files", "x.pdf"), backupOf(), "x.pdf");
+	} finally {
+		fs.renameSync = rename;
+	}
+	assert.equal(calls, 1);
+	assert.equal(target, path.join(backupOf(), "x.pdf"));
+	assert.deepEqual(fs.readFileSync(target), OLD);
+	assert.equal(exists("files/x.pdf"), false);
+});

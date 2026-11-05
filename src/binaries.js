@@ -436,8 +436,8 @@ function verify(file, data) {
 	}
 }
 
-function writeSynced(file, data) {
-	const fd = fs.openSync(file, "w");
+function writeSynced(file, data, flags = "w") {
+	const fd = fs.openSync(file, flags);
 	try {
 		fs.writeFileSync(fd, data);
 		fs.fsyncSync(fd);
@@ -597,8 +597,9 @@ function backupFile(file, backupDir, name) {
 		if (e.code !== "EXDEV") {
 			throw e;
 		}
+		// On disk before the original goes: it may be the only copy git doesn't hold
 		const bytes = fs.readFileSync(file);
-		fs.copyFileSync(file, target, fs.constants.COPYFILE_EXCL);
+		writeSynced(target, bytes, "wx");
 		verify(target, bytes);
 		fs.unlinkSync(file);
 	}

@@ -1,7 +1,27 @@
 # TW Desk binary tiddlers – interface for wiki plugins
 
-Status: **draft v1** (2026-11-04) – designed, not implemented yet. Names below are what TW Desk will write; they may
-still change before the first release that ships the feature.
+Status: externalize/internalize shipped in TW Desk 0.2.21. **Updating and deleting** (sections below) designed
+2026-11-05 (`2026-11-05-binary-delete-update-design.md`). **Derivatives** (thumbnails, page/sheet images, text) are
+**parked** – TW Desk does not write them; the sections about them stay only as a record of the parked design.
+
+## Updating a binary (for plugins that replace content on drop)
+
+To give an externalized binary a new version, a plugin replaces the tiddler's content and leaves a marker; TW Desk
+writes the new content into the same file in `files/` at the next stop:
+
+- keep title and all fields; `text` = new content as base64; `type` = the new file's type; update `modified`;
+- if `_canonical_uri` starts with `files/`: set `tw-desk-update-of` to that value and **remove `_canonical_uri`**
+  (the new version then displays at once from the embedded content);
+- keep an existing `tw-desk-update-of` on a second update; no marker for tiddlers that were still embedded.
+
+TW Desk then overwrites that file (same name; new extension if the type changed), sets `_canonical_uri` again and
+removes the marker. A file that another tiddler still points to is not overwritten – the new version gets a numbered
+name instead. Plugins never write into `files/` themselves.
+
+## Deleting a binary
+
+Nothing for plugins to do: when a tiddler that pointed to `files/<name>` is deleted, TW Desk deletes that file at the
+next stop (only for wikis whose policy is *externalize*; files no tiddler ever pointed to are left alone).
 
 Audience: authors of TiddlyWiki plugins (e.g. an attachment viewer) that want to show thumbnails, page previews or
 extracted text that TW Desk generates for binary tiddlers.

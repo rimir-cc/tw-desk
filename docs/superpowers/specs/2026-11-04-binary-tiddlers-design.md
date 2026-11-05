@@ -1,6 +1,6 @@
 # Binary tiddlers: externalize, internalize and derivatives – design
 
-Date: 2026-11-04 · Status: draft for review
+Date: 2026-11-04 · Status: part 1 shipped in 0.2.21; derivatives (thumbnails, pages, text, OCR, LibreOffice) parked on 2026-11-05 – see 2026-11-05-binary-delete-update-design.md
 
 ## Why
 

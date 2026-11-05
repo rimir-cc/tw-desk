@@ -1,6 +1,6 @@
 # Binary tiddlers: deleting and updating externalized files – design
 
-Date: 2026-11-05 · Status: approved · Builds on `2026-11-04-binary-tiddlers-design.md` (part 1, shipped in 0.2.21)
+Date: 2026-11-05 · Status: shipped in 0.2.22 · Builds on `2026-11-04-binary-tiddlers-design.md` (part 1, shipped in 0.2.21)
 
 ## Why
 

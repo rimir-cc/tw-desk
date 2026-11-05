@@ -140,6 +140,7 @@ Windows, done by the user.
   (`modified` not bumped); `$:/` tiddlers untouched. Externalized = `.tid` with `_canonical_uri: files/<name>`, empty text;
   `<name>` is the binary's own file name (lower-case extension, numbered on clashes). Binaries without `.meta` are never moved.
   Internalize keeps the file in `files/`. `filesInGit: false` appends `files/` to `.gitignore` (never `git rm --cached`). `filesInGit: true` removes that line again (`ensureNotIgnored`) when the policy runs. A title's own registered extension (`.jpeg`, `.m4a`) is kept. Internalize refuses files a symlink leads out of `files/`. Leftover `*.tw-desk-tmp` files are removed before every server start.
+  **Deleting/updating (externalize only, 0.2.22):** record `<userData>/binaries/<wiki id>.json` ({folder, inUse, pending}) is written only at policy runs; dropped when policy or folder changes in Edit, after an internalize run, and when the wiki is removed/deleted. No record -> the run only records. A file in `files/` whose tiddler was deleted is deleted. New version = drop-attach marker `tw-desk-update-of` or plain re-import: written into the existing file (same name). Files git doesn't hold unchanged vs HEAD (`git ls-files` minus `git diff HEAD`) are backed up first to `<userData>/backup/<timestamp>/<wiki folder name>/files/`; known limit: assume-unchanged/skip-worktree and clean filters/LFS can make git report "unchanged". Guard (R1): > 10 deletions, or every recorded file whose file still exists when the record has >= 3 such files -> nothing deleted, chip `▣ N files to delete`, menu "Delete N unused files..." / "Keep these files". References from included wikis and the wiki's `plugins/` protect files but are never recorded; an incomplete scan (tiddlywiki.files folder, unreadable file, symlinked entry) deletes nothing. No chip for unused files alone; the count is in the chip tooltip when a chip shows.
 - `TW_DESK_USER_DATA` env var overrides the user data folder (config, store, backup) – used for testing.
 
 ## Testing
@@ -209,9 +210,9 @@ rules everywhere, so wikis stay usable on Windows. The manager window quits the 
 - In this environment Bash heredocs can mangle backslashes (`\\` → `\`); use the Edit/Write tools for
   files containing backslashes (JSON with Windows paths, regexes).
 
-## State (as of 2026-11-04)
+## State (as of 2026-11-05)
 
-- Version 0.2.21 committed (binary tiddlers: per-wiki externalize/internalize policy with row chip; before that links handed over from wikis in a browser, links between wikis with twdesk:// and http forms and the built-in TW Desk links plugin, asking before closing wiki/snapshot windows with unsaved changes, safe config writes, export/import of the setup, separate Demo/Website pills, showcase links to plugins, plugin showcases, search across all plugin libraries, groups, descriptions, web wiki links with snapshots and change checks, update check per library, create/copy/delete wizards, automatic ports, git,
+- Version 0.2.22 committed (binary tiddlers: deleting unused files and updating externalized files with backup and mass-deletion guard; before that per-wiki externalize/internalize policy with row chip; before that links handed over from wikis in a browser, links between wikis with twdesk:// and http forms and the built-in TW Desk links plugin, asking before closing wiki/snapshot windows with unsaved changes, safe config writes, export/import of the setup, separate Demo/Website pills, showcase links to plugins, plugin showcases, search across all plugin libraries, groups, descriptions, web wiki links with snapshots and change checks, update check per library, create/copy/delete wizards, automatic ports, git,
   Linux/macOS build targets, row menus and drag & drop). Builds are made by the user on Windows. 0.2.0 was the first
   update from the short-path layout.
 - The user's wikis list their plugins in `tiddlywiki.info` (e.g. `orga`: rimir/kind, rimir/ports, rimir/frontmatter,

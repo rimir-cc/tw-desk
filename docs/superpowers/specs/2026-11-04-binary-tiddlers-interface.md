@@ -1,7 +1,7 @@
 # TW Desk binary tiddlers – interface for wiki plugins
 
-Status: externalize/internalize shipped in TW Desk 0.2.21. **Updating and deleting** (sections below) designed
-2026-11-05 (`2026-11-05-binary-delete-update-design.md`). **Derivatives** (thumbnails, page/sheet images, text) are
+Status: externalize/internalize shipped in TW Desk 0.2.21. **Updating and deleting** (sections below) shipped in
+0.2.22 (`2026-11-05-binary-delete-update-design.md`). **Derivatives** (thumbnails, page/sheet images, text) are
 **parked** – TW Desk does not write them; the sections about them stay only as a record of the parked design.
 
 ## Updating a binary (for plugins that replace content on drop)

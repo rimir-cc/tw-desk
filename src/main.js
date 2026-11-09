@@ -11,6 +11,7 @@ const web = require("./web");
 const setup = require("./setup");
 const links = require("./links");
 const binaries = require("./binaries");
+const pluginChain = require("./plugin-chain");
 const http = require("http");
 
 const DEFAULT_BASE_PORT = 8090;
@@ -217,7 +218,7 @@ function snapshot() {
 		webCheck: webCheckEnabled(),
 		links: linkState(),
 		webCollapsed: !!config.webCollapsed,
-		wikis: config.wikis.map(w => Object.assign({}, w, { group: groupOf(w), linkKey: links.linkKeyOf(w) }, serverState(w.id), { port: activePort(w.id), url: wikiUrl(w.id) }, readIncludes(w.path), { binaries: binarySettingsOf(w), binaryScan: binaryScans.get(w.id) || null }))
+		wikis: config.wikis.map(w => Object.assign({}, w, { group: groupOf(w), linkKey: links.linkKeyOf(w) }, serverState(w.id), { port: activePort(w.id), url: wikiUrl(w.id) }, readIncludes(w.path), { binaries: binarySettingsOf(w), binaryScan: binaryScans.get(w.id) || null, pluginClashes: pluginClashes.get(w.id) || [] }))
 	};
 }
 
@@ -404,6 +405,7 @@ async function startWiki(id) {
 		if (state.status === "starting" && text.includes("Serving on")) {
 			state.status = "running";
 			pushState();
+			refreshPluginClashes();
 		}
 		appendLog(id, text);
 	};
@@ -421,6 +423,7 @@ async function startWiki(id) {
 			state.error = "Server exited with code " + code + ". See log.";
 		}
 		state.stopping = false;
+		refreshPluginClashes();
 		appendLog(id, "Server stopped" + (code !== null ? " (exit code " + code + ")" : ""));
 		const win = wikiWindows.get(id);
 		if (win && !win.isDestroyed()) {
@@ -1495,6 +1498,7 @@ ipcMain.handle("save-wiki", (event, input) => {
 
 ipcMain.handle("save-includes", (event, id, entries) => {
 	saveIncludes(id, entries);
+	refreshPluginClashes();
 	checkGit({ fetch: false });
 	scanBinaries();
 });
@@ -1551,7 +1555,12 @@ ipcMain.handle("binaries-scan", (event, id) => {
 
 // ---------- plugins ----------
 
-// All wiki folders TW Desk knows: the wikis in the list plus the folders they include
+// The folders a wiki loads, in TiddlyWiki's order (includes transitively, the wiki itself last)
+function includeWalk(folderPath) {
+	return pluginChain.walkIncludes(path.resolve(folderPath), readIncludes, folderKey);
+}
+
+// All wiki folders TW Desk knows: the wikis in the list plus the folders they include, transitively
 function knownFolders() {
 	const folders = new Map(); // lower-cased path -> folder
 	const add = (folderPath, wiki) => {
@@ -1560,7 +1569,7 @@ function knownFolders() {
 			folders.set(key, { path: path.resolve(folderPath), name: null, users: [] });
 		}
 		const folder = folders.get(key);
-		if (wiki) {
+		if (wiki && !folder.users.includes(wiki)) {
 			folder.users.push(wiki);
 		}
 		return folder;
@@ -1569,17 +1578,15 @@ function knownFolders() {
 		add(wiki.path, wiki).name = wiki.name;
 	}
 	for (const wiki of config.wikis) {
-		for (const include of readIncludes(wiki.path).includes) {
-			if (include.exists) {
-				add(include.resolved, wiki);
-			}
+		for (const item of includeWalk(wiki.path).order) {
+			add(item.path, wiki);
 		}
 	}
 	return [...folders.values()].map(folder => ({
 		path: folder.path,
 		name: folder.name || path.basename(folder.path),
 		managed: !!folder.name,
-		// Wikis that load this folder: the wiki itself and the wikis including it
+		// Wikis that load this folder: the wiki itself and the wikis including it (directly or through other includes)
 		usedBy: folder.users.map(w => w.name),
 		running: folder.users.some(w => ["running", "starting"].includes(serverState(w.id).status))
 	}));
@@ -1669,7 +1676,76 @@ function installFromShowcase(id, title) {
 	return plugins.writeToStore(fields, { library: SHOWCASE_PREFIX + id });
 }
 
+// Reads every folder at most once per call: { lists, error, stored } by folder key
+function folderPluginReader() {
+	const cache = new Map();
+	return folderPath => {
+		const key = folderKey(folderPath);
+		if (!cache.has(key)) {
+			let lists = null;
+			let error = null;
+			try {
+				lists = plugins.folderLists(folderPath);
+			} catch (e) {
+				error = "Cannot read tiddlywiki.info: " + e.message;
+			}
+			cache.set(key, { lists, error, stored: plugins.listStoredInWiki(folderPath) });
+		}
+		return cache.get(key);
+	};
+}
+
+// What a name listed in tiddlywiki.info loads: the bundled plugin first, then the store
+function pluginResolver() {
+	const bundled = plugins.listBundled();
+	const store = plugins.listStore();
+	return (kind, name) => {
+		const found = bundled.find(p => p.kind === kind && p.name === name) || store.find(p => p.kind === kind && p.name === name);
+		return found
+			? { title: found.title, origin: found.source === "bundled" ? "bundled" : "store", version: found.version || "" }
+			: { title: plugins.titleOf(kind, name), origin: "missing", version: "" };
+	};
+}
+
+function folderChain(folderPath, read, resolve) {
+	const walk = includeWalk(folderPath);
+	return Object.assign(pluginChain.analyzeChain(walk.order, read, resolve, folderKey), { errors: walk.errors });
+}
+
+function folderDisplayName(folderPath) {
+	const wiki = config.wikis.find(w => folderKey(w.path) === folderKey(folderPath));
+	return wiki ? wiki.name : path.basename(folderPath);
+}
+
+// Version clashes per managed wiki, for the home view; recomputed only on plugin, include and start/stop changes
+const pluginClashes = new Map(); // wiki id -> [{ title, text }]
+
+function refreshPluginClashes() {
+	const read = folderPluginReader();
+	const resolve = pluginResolver();
+	const before = JSON.stringify([...pluginClashes]);
+	pluginClashes.clear();
+	for (const wiki of config.wikis) {
+		try {
+			const chain = folderChain(wiki.path, read, resolve);
+			const clashes = chain.problems.filter(p => p.type === "clash")
+				.map(p => ({ title: p.title, text: pluginChain.clashText(p, chain.entries, folderDisplayName) }));
+			if (clashes.length) {
+				pluginClashes.set(wiki.id, clashes);
+			}
+		} catch (e) {
+			console.error("plugin clash check failed for " + wiki.name + ":", e);
+		}
+	}
+	if (JSON.stringify([...pluginClashes]) !== before) {
+		pushState();
+	}
+}
+
 function pluginsState() {
+	const read = folderPluginReader();
+	const resolve = pluginResolver();
+	refreshPluginClashes();
 	return {
 		storePath: plugins.storePath(),
 		backupPath: path.join(app.getPath("userData"), "backup"),
@@ -1678,16 +1754,10 @@ function pluginsState() {
 		showcases: showcaseIndexes(),
 		store: plugins.listStore(),
 		bundled: plugins.listBundled(),
-		folders: knownFolders().map(folder => {
-			let lists = null;
-			let error = null;
-			try {
-				lists = plugins.folderLists(folder.path);
-			} catch (e) {
-				error = "Cannot read tiddlywiki.info: " + e.message;
-			}
-			return Object.assign(folder, { lists, error, stored: plugins.listStoredInWiki(folder.path) });
-		})
+		folders: pluginChain.orderFolders(knownFolders(), config.pluginsFolderOrder || [], folderKey).map(folder => Object.assign(folder, read(folder.path), {
+			description: "",
+			chain: folderChain(folder.path, read, resolve)
+		}))
 	};
 }
 
@@ -1719,9 +1789,13 @@ ipcMain.handle("plugins-open-link", (event, url) => {
 	return shell.openExternal(String(url));
 });
 
-ipcMain.handle("plugins-install", (event, url, title) => url.startsWith(SHOWCASE_PREFIX)
-	? installFromShowcase(url.slice(SHOWCASE_PREFIX.length), title)
-	: plugins.installFromLibrary(findLibrary(url), title));
+ipcMain.handle("plugins-install", async (event, url, title) => {
+	const result = await (url.startsWith(SHOWCASE_PREFIX)
+		? installFromShowcase(url.slice(SHOWCASE_PREFIX.length), title)
+		: plugins.installFromLibrary(findLibrary(url), title));
+	refreshPluginClashes();
+	return result;
+});
 
 ipcMain.handle("plugins-remove", (event, kind, name) => {
 	const key = plugins.KINDS[kind].infoKey;
@@ -1736,6 +1810,7 @@ ipcMain.handle("plugins-remove", (event, kind, name) => {
 		throw new Error("Still used by: " + users.map(f => f.name).join(", ") + ". Remove it from those wikis first.");
 	}
 	plugins.removeFromStore(kind, name);
+	refreshPluginClashes();
 });
 
 ipcMain.handle("plugins-link-showcase", (event, id, title, linked) => linkShowcase(id, title, linked));
@@ -1749,6 +1824,16 @@ ipcMain.handle("plugins-check-updates", () => {
 ipcMain.handle("plugins-set-list", (event, folderPath, kind, names) => {
 	const folder = findFolder(folderPath);
 	plugins.setFolderList(folder.path, kind, names);
+	refreshPluginClashes();
+});
+
+// The order of the cards in Plugins → Wikis (folder paths)
+ipcMain.handle("plugins-set-order", (event, paths) => {
+	if (!Array.isArray(paths)) {
+		throw new Error("No folder order given.");
+	}
+	config.pluginsFolderOrder = paths.filter(p => typeof p === "string" && p);
+	saveConfig();
 });
 
 ipcMain.handle("plugins-move-to-store", (event, folderPath, file) => {
@@ -1756,7 +1841,9 @@ ipcMain.handle("plugins-move-to-store", (event, folderPath, file) => {
 	if (folder.running) {
 		throw new Error("Stop the wikis using this folder first: " + folder.usedBy.join(", "));
 	}
-	return plugins.moveToStore(folder.path, file);
+	const result = plugins.moveToStore(folder.path, file);
+	refreshPluginClashes();
+	return result;
 });
 
 ipcMain.handle("remove-wiki", (event, id) => {
@@ -2472,9 +2559,9 @@ function setupFolders(wikis) {
 	const folders = new Map();
 	for (const wiki of wikis) {
 		folders.set(folderKey(wiki.path), path.resolve(wiki.path));
-		for (const include of readIncludes(wiki.path).includes) {
-			if (include.exists) {
-				folders.set(folderKey(include.resolved), include.resolved);
+		for (const item of includeWalk(wiki.path).order) {
+			if (!folders.has(folderKey(item.path))) {
+				folders.set(folderKey(item.path), item.path);
 			}
 		}
 	}
@@ -2861,6 +2948,7 @@ if (!app.requestSingleInstanceLock()) {
 		plugins.init(app.getPath("userData"));
 		loadConfig();
 		createManagerWindow();
+		refreshPluginClashes();
 		scheduleGitChecks();
 		checkGit({ fetch: gitSettings().fetch });
 		scheduleWebChecks();

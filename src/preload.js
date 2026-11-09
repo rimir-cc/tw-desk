@@ -37,6 +37,7 @@ contextBridge.exposeInMainWorld("twDesk", {
 		checkUpdates: () => ipcRenderer.invoke("plugins-check-updates"),
 		linkShowcase: (id, title, linked) => ipcRenderer.invoke("plugins-link-showcase", id, title, linked),
 		setList: (folder, kind, names) => ipcRenderer.invoke("plugins-set-list", folder, kind, names),
+		setOrder: paths => ipcRenderer.invoke("plugins-set-order", paths),
 		moveToStore: (folder, file) => ipcRenderer.invoke("plugins-move-to-store", folder, file)
 	},
 	setup: {

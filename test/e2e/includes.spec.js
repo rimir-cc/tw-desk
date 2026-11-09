@@ -65,3 +65,26 @@ test("includes: add, serve, read-only, overview, remove", async ({ desk }) => {
 	expect(includeWikis(alpha)).toEqual([]);
 	await expect(row.locator(".wiki-includes")).toHaveCount(0);
 });
+
+test("descriptions for included folders", async ({ desk }) => {
+	const alpha = desk.wiki("alpha");
+	const shared = desk.wiki("shared");
+	const infoFile = path.join(alpha, "tiddlywiki.info");
+	fs.writeFileSync(infoFile, JSON.stringify(Object.assign(JSON.parse(fs.readFileSync(infoFile, "utf8")), { includeWikis: ["../shared"] }), null, 4));
+	const page = await desk.launch({ wikis: [{ name: "Alpha", path: alpha }] });
+	const row = desk.row("Alpha");
+
+	await page.locator("#show-includes").click();
+	const item = page.locator("#includes-overview li", { hasText: "shared" });
+	await item.locator("textarea").fill("Shared core");
+	await item.getByRole("button", { name: "Save" }).click();
+	await expect.poll(() => Object.values(desk.config().folderDescriptions || {})).toEqual(["Shared core"]);
+	expect(Object.keys(desk.config().folderDescriptions)).toEqual([shared]);
+	await page.locator("#close-includes").click();
+
+	const chip = row.locator(".wiki-includes .chip", { hasText: "shared" });
+	await expect(chip).toHaveAttribute("title", shared + "\nShared core");
+	await page.locator("#show-plugins").click();
+	await page.locator("#plugins-dialog [data-tab=wikis]").click();
+	await expect(page.locator("#tab-wikis .card", { has: page.locator(".card-title strong", { hasText: /^shared$/ }) }).locator(".folder-description")).toHaveText("Shared core");
+});

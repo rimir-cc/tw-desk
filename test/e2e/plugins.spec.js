@@ -180,3 +180,18 @@ test("wikis tab: inherited plugins, clash, order, collapse, removal prompt", asy
 	expect(texts[0]).toContain("loses it on its next restart");
 	expect(JSON.parse(fs.readFileSync(path.join(deep, "tiddlywiki.info"), "utf8")).plugins).toContain("tiddlywiki/internals");
 });
+
+test("home view: plugin clash chip opens the wiki's card", async ({ desk }) => {
+	setUpChain(desk);
+	const page = await desk.launch({ wikis: [{ name: "Alpha", path: path.join(desk.wikisDir, "alpha") }] });
+	const chip = desk.row("Alpha").locator(".plugin-clash");
+	await expect(chip).toHaveText("⚠ plugin clash");
+	await expect(chip).toHaveAttribute("title", "$:/plugins/test/hello: in shared 1.0.0 · store 1.1.0 – the store copy wins");
+	// Even when the card was collapsed
+	await page.evaluate(folder => localStorage.setItem("tw-desk.plugins.collapsed", JSON.stringify([pathKey(folder)])), path.join(desk.wikisDir, "alpha"));
+	await chip.click();
+	const dialog = page.locator("#plugins-dialog");
+	await expect(dialog).toBeVisible();
+	await expect(dialog.locator("[data-tab=wikis]")).toHaveClass(/active/);
+	await expect(dialog.locator("#tab-wikis .card", { has: page.locator(".card-title strong", { hasText: /^Alpha$/ }) }).locator(".plugin-table").first()).toBeVisible();
+});

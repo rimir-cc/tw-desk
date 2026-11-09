@@ -275,3 +275,5 @@ textarea, input:not([type=checkbox]):not([type=radio]) {
 .inherited .plugin-table td { color: var(--muted); }
 .badge.clash { color: var(--error); border-color: var(--error); }
 .badge.duplicate { color: var(--muted); border-style: dashed; }
+.overview-description { display: flex; gap: 6px; align-items: flex-start; margin: 4px 0; font-size: 12px; }
+.overview-description textarea { flex: 1; font: inherit; }

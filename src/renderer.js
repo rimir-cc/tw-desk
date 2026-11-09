@@ -164,6 +164,12 @@ function wikiItem(wiki, index, count) {
 	if (binary) {
 		name.append(" ", binary);
 	}
+	if (wiki.pluginClashes && wiki.pluginClashes.length) {
+		name.append(" ", button("⚠ plugin clash", () => openPluginsTab("wikis", wiki.path), {
+			className: "git-chip warn plugin-clash",
+			title: wiki.pluginClashes.map(c => c.title + ": " + c.text).join("\n")
+		}));
+	}
 	// Links to this wiki would be ambiguous
 	const sameKey = state.wikis.filter(w => w.linkKey.toLowerCase() === wiki.linkKey.toLowerCase());
 	if (sameKey.length > 1) {
@@ -743,7 +749,7 @@ function includeChip(text, include) {
 	const chip = document.createElement("span");
 	chip.className = "chip" + (include.exists ? "" : " missing");
 	chip.textContent = text + (include.exists ? "" : " (missing)");
-	chip.title = include.resolved + (include.exists ? "" : "\nNo tiddlywiki.info found there.");
+	chip.title = include.resolved + (include.description ? "\n" + include.description : "") + (include.exists ? "" : "\nNo tiddlywiki.info found there.");
 	return chip;
 }
 
@@ -755,7 +761,7 @@ function showIncludesOverview() {
 		for (const include of wiki.includes) {
 			const key = pathKey(include.resolved);
 			if (!groups.has(key)) {
-				groups.set(key, { resolved: include.resolved, exists: include.exists, users: [] });
+				groups.set(key, { resolved: include.resolved, exists: include.exists, description: include.description || "", users: [] });
 			}
 			groups.get(key).users.push({ wiki, include });
 		}
@@ -781,10 +787,29 @@ function showIncludesOverview() {
 		for (const { wiki, include } of group.users) {
 			users.append(includeChip(wiki.name + (include.readOnly ? " (read-only)" : ""), { resolved: wiki.path, exists: true }));
 		}
-		li.append(name, folder, users);
+		li.append(name, folder, includeDescription(group, managed), users);
 		list.append(li);
 	}
 	$("#includes-dialog").showModal();
+}
+
+// A managed wiki's description is edited with the wiki; other included folders get theirs here
+function includeDescription(group, managed) {
+	const box = document.createElement("div");
+	box.className = "overview-description";
+	if (managed) {
+		box.textContent = (managed.description || "No description.") + " (edit the wiki to change it)";
+		box.classList.add("muted");
+		return box;
+	}
+	const text = document.createElement("textarea");
+	text.rows = 2;
+	text.maxLength = 2000;
+	text.placeholder = "What is this shared folder for?";
+	text.value = group.description;
+	const save = button("Save", () => api.setFolderDescription(group.resolved, text.value), { className: "ghost", title: "Save the description of this folder" });
+	box.append(text, save);
+	return box;
 }
 
 $("#show-includes").addEventListener("click", showIncludesOverview);

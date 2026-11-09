@@ -186,3 +186,27 @@ test("export keeps the binary settings", () => {
 	assert.deepEqual(plan.folders[0].binaries, { policy: "externalize", filesInGit: false });
 	assert.equal(plan.folders[1].binaries, null);
 });
+
+test("folder descriptions travel with the setup", () => {
+	const base = path.join(dir, "export-descriptions", "wikis");
+	const orga = path.join(base, "orga");
+	const shared = path.join(base, "_shared");
+	const data = setup.buildSetup({
+		app: "0.2.23",
+		tiddlywiki: "5.4.1",
+		platform: process.platform,
+		key,
+		groups: [],
+		wikis: [{ id: "w1", name: "Orga", path: orga }],
+		folders: [
+			{ path: orga, git: null },
+			{ path: shared, git: null, description: "Shared core" }
+		],
+		webWikis: []
+	});
+	assert.deepEqual(data.folders, [{ folder: "orga", repo: null }, { folder: "_shared", repo: null, description: "Shared core" }]);
+	const env = { key, wikis: [], webWikis: [], groups: [], libraries: [], store: [], bundled: [], compareVersions: () => 0, parseTitle: () => null };
+	const plan = setup.planImport(setup.readSetup(JSON.stringify(data)), path.join(dir, "import-descriptions"), env);
+	assert.equal(plan.folders.find(f => f.relative === "_shared").description, "Shared core");
+	assert.equal(plan.folders.find(f => f.relative === "orga").description, null);
+});

@@ -19,6 +19,7 @@ contextBridge.exposeInMainWorld("twDesk", {
 	deleteCheck: id => ipcRenderer.invoke("delete-check", id),
 	deleteWiki: id => ipcRenderer.invoke("delete-wiki", id),
 	saveIncludes: (id, entries) => ipcRenderer.invoke("save-includes", id, entries),
+	setFolderDescription: (folder, text) => ipcRenderer.invoke("set-folder-description", folder, text),
 	binaries: {
 		apply: id => ipcRenderer.invoke("binaries-apply", id),
 		scan: id => ipcRenderer.invoke("binaries-scan", id),

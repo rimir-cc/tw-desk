@@ -57,7 +57,7 @@ function buildSetup(input) {
 		origin: { base, platform: input.platform },
 		folders: input.folders.map(f => Object.assign(place(f.path), {
 			repo: f.git ? Object.assign(place(f.git.root), { url: f.git.url || null, branch: f.git.branch || null }) : null
-		})),
+		}, f.description ? { description: String(f.description) } : {})),
 		groups: input.groups.filter(g => input.wikis.some(w => w.group === g.id)).map(g => ({ name: g.name, collapsed: !!g.collapsed })),
 		wikis: input.wikis.map(w => {
 			const wiki = Object.assign({ name: w.name }, place(w.path));
@@ -209,7 +209,9 @@ function planImport(setup, base, env) {
 			path: target,
 			url: repo ? repo.url : null,
 			branch: repo ? repo.branch : null,
-			binaries: wiki && wiki.binaries ? wiki.binaries : null
+			binaries: wiki && wiki.binaries ? wiki.binaries : null,
+			// Descriptions of included folders (a wiki's own travels with the wiki)
+			description: !wiki && entry.description ? String(entry.description) : null
 		};
 		const inDesk = target && env.wikis.find(w => key(w.path) === key(target));
 		if (!target) {

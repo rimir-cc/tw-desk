@@ -218,8 +218,12 @@ function snapshot() {
 		webCheck: webCheckEnabled(),
 		links: linkState(),
 		webCollapsed: !!config.webCollapsed,
-		wikis: config.wikis.map(w => Object.assign({}, w, { group: groupOf(w), linkKey: links.linkKeyOf(w) }, serverState(w.id), { port: activePort(w.id), url: wikiUrl(w.id) }, readIncludes(w.path), { binaries: binarySettingsOf(w), binaryScan: binaryScans.get(w.id) || null, pluginClashes: pluginClashes.get(w.id) || [] }))
+		wikis: config.wikis.map(w => Object.assign({}, w, { group: groupOf(w), linkKey: links.linkKeyOf(w) }, serverState(w.id), { port: activePort(w.id), url: wikiUrl(w.id) }, withDescriptions(readIncludes(w.path)), { binaries: binarySettingsOf(w), binaryScan: binaryScans.get(w.id) || null, pluginClashes: pluginClashes.get(w.id) || [] }))
 	};
+}
+
+function withDescriptions(result) {
+	return Object.assign({}, result, { includes: result.includes.map(i => Object.assign({}, i, { description: folderDescription(i.resolved) })) });
 }
 
 // ---------- tiddlywiki.info: includeWikis ----------
@@ -1712,6 +1716,36 @@ function folderChain(folderPath, read, resolve) {
 	return Object.assign(pluginChain.analyzeChain(walk.order, read, resolve, folderKey), { errors: walk.errors });
 }
 
+// A managed wiki's own description, else the one kept for an included folder in config.folderDescriptions
+function folderDescription(folderPath) {
+	const wiki = config.wikis.find(w => folderKey(w.path) === folderKey(folderPath));
+	if (wiki) {
+		return wiki.description || "";
+	}
+	const entry = Object.entries(config.folderDescriptions || {}).find(([key]) => folderKey(key) === folderKey(folderPath));
+	return entry ? String(entry[1]) : "";
+}
+
+function setFolderDescription(folderPath, text) {
+	if (config.wikis.some(w => folderKey(w.path) === folderKey(folderPath))) {
+		throw new Error("Edit the wiki to change its description.");
+	}
+	const folder = knownFolders().find(f => folderKey(f.path) === folderKey(folderPath));
+	if (!folder) {
+		throw new Error("Unknown wiki folder: " + folderPath);
+	}
+	const descriptions = Object.fromEntries(Object.entries(config.folderDescriptions || {}).filter(([key]) => folderKey(key) !== folderKey(folder.path)));
+	const description = String(text || "").trim().slice(0, 2000);
+	if (description) {
+		descriptions[folder.path] = description;
+	}
+	config.folderDescriptions = descriptions;
+	saveConfig();
+	pushState();
+}
+
+ipcMain.handle("set-folder-description", (event, folderPath, text) => setFolderDescription(String(folderPath || ""), text));
+
 function folderDisplayName(folderPath) {
 	const wiki = config.wikis.find(w => folderKey(w.path) === folderKey(folderPath));
 	return wiki ? wiki.name : path.basename(folderPath);
@@ -1755,7 +1789,7 @@ function pluginsState() {
 		store: plugins.listStore(),
 		bundled: plugins.listBundled(),
 		folders: pluginChain.orderFolders(knownFolders(), config.pluginsFolderOrder || [], folderKey).map(folder => Object.assign(folder, read(folder.path), {
-			description: "",
+			description: folderDescription(folder.path),
 			chain: folderChain(folder.path, read, resolve)
 		}))
 	};
@@ -2613,7 +2647,8 @@ ipcMain.handle("setup-export", async (event, choices) => {
 	const skipped = [];
 	const folders = [];
 	for (const folder of setupFolders(wikis)) {
-		folders.push({ path: folder, git: await folderGitInfo(folder).catch(() => null) });
+		const description = config.wikis.some(w => folderKey(w.path) === folderKey(folder)) ? "" : folderDescription(folder);
+		folders.push(Object.assign({ path: folder, git: await folderGitInfo(folder).catch(() => null) }, description ? { description } : {}));
 	}
 	const setupData = setup.buildSetup({
 		app: app.getVersion(),
@@ -2888,6 +2923,13 @@ async function runImport(base, choices) {
 		scheduleWebChecks();
 		startRouter();
 		registerScheme();
+	}
+
+	// Descriptions of included folders that exist now, unless this computer has one already
+	for (const item of plan.folders) {
+		if (!item.wiki && item.description && item.path && setup.isWikiFolder(item.path) && !folderDescription(item.path)) {
+			config.folderDescriptions = Object.assign({}, config.folderDescriptions, { [path.resolve(item.path)]: item.description });
+		}
 	}
 
 	saveConfig();

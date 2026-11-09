@@ -218,6 +218,8 @@ function snapshot() {
 		webCheck: webCheckEnabled(),
 		links: linkState(),
 		webCollapsed: !!config.webCollapsed,
+		// Folders loaded only through includes (also deeper ones), for the Includes overview
+		includedFolders: knownFolders().filter(f => !f.managed).map(f => ({ path: f.path, usedBy: f.usedBy, description: folderDescription(f.path) })),
 		wikis: config.wikis.map(w => Object.assign({}, w, { group: groupOf(w), linkKey: links.linkKeyOf(w) }, serverState(w.id), { port: activePort(w.id), url: wikiUrl(w.id) }, withDescriptions(readIncludes(w.path)), { binaries: binarySettingsOf(w), binaryScan: binaryScans.get(w.id) || null, pluginClashes: pluginClashes.get(w.id) || [] }))
 	};
 }
@@ -409,7 +411,6 @@ async function startWiki(id) {
 		if (state.status === "starting" && text.includes("Serving on")) {
 			state.status = "running";
 			pushState();
-			refreshPluginClashes();
 		}
 		appendLog(id, text);
 	};
@@ -1477,7 +1478,11 @@ ipcMain.handle("pick-file", async (event, title, filters) => {
 	return result.canceled ? null : result.filePaths[0];
 });
 
-ipcMain.handle("create-wiki", (event, input) => createWiki(input));
+ipcMain.handle("create-wiki", async (event, input) => {
+	const result = await createWiki(input);
+	refreshPluginClashes();
+	return result;
+});
 
 ipcMain.handle("save-wiki", (event, input) => {
 	const wiki = wikiFromInput(input);
@@ -1495,6 +1500,7 @@ ipcMain.handle("save-wiki", (event, input) => {
 	}
 	saveConfig();
 	pushState();
+	refreshPluginClashes();
 	checkGit({ fetch: false });
 	scanBinaries();
 	return wiki.id;
@@ -1754,9 +1760,10 @@ function folderDisplayName(folderPath) {
 // Version clashes per managed wiki, for the home view; recomputed only on plugin, include and start/stop changes
 const pluginClashes = new Map(); // wiki id -> [{ title, text }]
 
-function refreshPluginClashes() {
-	const read = folderPluginReader();
-	const resolve = pluginResolver();
+function refreshPluginClashes(read = folderPluginReader(), resolve = pluginResolver()) {
+	if (quitting) {
+		return;
+	}
 	const before = JSON.stringify([...pluginClashes]);
 	pluginClashes.clear();
 	for (const wiki of config.wikis) {
@@ -1779,7 +1786,7 @@ function refreshPluginClashes() {
 function pluginsState() {
 	const read = folderPluginReader();
 	const resolve = pluginResolver();
-	refreshPluginClashes();
+	refreshPluginClashes(read, resolve);
 	return {
 		storePath: plugins.storePath(),
 		backupPath: path.join(app.getPath("userData"), "backup"),
@@ -2934,6 +2941,7 @@ async function runImport(base, choices) {
 
 	saveConfig();
 	pushState();
+	refreshPluginClashes();
 	checkGit({ fetch: false });
 	scanBinaries();
 	if (!report.length) {

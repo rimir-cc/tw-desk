@@ -766,6 +766,13 @@ function showIncludesOverview() {
 			groups.get(key).users.push({ wiki, include });
 		}
 	}
+	// Folders that only a deeper include loads
+	for (const folder of state.includedFolders || []) {
+		const key = pathKey(folder.path);
+		if (!groups.has(key)) {
+			groups.set(key, { resolved: folder.path, exists: true, description: folder.description || "", users: [], through: folder.usedBy });
+		}
+	}
 	const list = $("#includes-overview");
 	list.replaceChildren();
 	if (!groups.size) {
@@ -783,11 +790,15 @@ function showIncludesOverview() {
 		folder.textContent = group.resolved + (managed ? " · also in TW Desk as \"" + managed.name + "\"" : "") + (group.exists ? "" : " · missing (no tiddlywiki.info)");
 		const users = document.createElement("div");
 		users.className = "overview-wikis";
-		users.append("included by:");
+		if (group.through) {
+			users.append("loaded through other includes by: " + group.through.join(", "));
+		} else {
+			users.append("included by:");
+		}
 		for (const { wiki, include } of group.users) {
 			users.append(includeChip(wiki.name + (include.readOnly ? " (read-only)" : ""), { resolved: wiki.path, exists: true }));
 		}
-		li.append(name, folder, includeDescription(group, managed), users);
+		li.append(...[name, folder, includeDescription(group, managed), users].filter(Boolean));
 		list.append(li);
 	}
 	$("#includes-dialog").showModal();
@@ -801,6 +812,9 @@ function includeDescription(group, managed) {
 		box.textContent = (managed.description || "No description.") + " (edit the wiki to change it)";
 		box.classList.add("muted");
 		return box;
+	}
+	if (!group.exists) {
+		return null;
 	}
 	const text = document.createElement("textarea");
 	text.rows = 2;

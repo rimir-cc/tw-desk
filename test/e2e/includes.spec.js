@@ -88,3 +88,26 @@ test("descriptions for included folders", async ({ desk }) => {
 	await page.locator("#plugins-dialog [data-tab=wikis]").click();
 	await expect(page.locator("#tab-wikis .card", { has: page.locator(".card-title strong", { hasText: /^shared$/ }) }).locator(".folder-description")).toHaveText("Shared core");
 });
+
+test("includes overview: deeper folders get a description field, missing ones none", async ({ desk }) => {
+	const alpha = desk.wiki("alpha");
+	const shared = desk.wiki("shared");
+	const deep = desk.wiki("deep", "shared");
+	const edit = (folder, includeWikis) => {
+		const file = path.join(folder, "tiddlywiki.info");
+		fs.writeFileSync(file, JSON.stringify(Object.assign(JSON.parse(fs.readFileSync(file, "utf8")), { includeWikis }), null, 4));
+	};
+	edit(alpha, ["../shared", "../nowhere"]);
+	edit(shared, ["../deep"]);
+	const page = await desk.launch({ wikis: [{ name: "Alpha", path: alpha }] });
+
+	await page.locator("#show-includes").click();
+	const deepItem = page.locator("#includes-overview li", { has: page.locator("strong", { hasText: /^deep$/ }) });
+	await expect(deepItem).toContainText("Alpha");
+	await deepItem.locator("textarea").fill("Base layer");
+	await deepItem.getByRole("button", { name: "Save" }).click();
+	await expect.poll(() => (desk.config().folderDescriptions || {})[deep]).toBe("Base layer");
+	const missing = page.locator("#includes-overview li", { has: page.locator("strong", { hasText: /^nowhere$/ }) });
+	await expect(missing).toBeVisible();
+	await expect(missing.locator("textarea")).toHaveCount(0);
+});

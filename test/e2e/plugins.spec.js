@@ -195,3 +195,13 @@ test("home view: plugin clash chip opens the wiki's card", async ({ desk }) => {
 	await expect(dialog.locator("[data-tab=wikis]")).toHaveClass(/active/);
 	await expect(dialog.locator("#tab-wikis .card", { has: page.locator(".card-title strong", { hasText: /^Alpha$/ }) }).locator(".plugin-table").first()).toBeVisible();
 });
+
+test("home view: adding a wiki with a clash shows the chip right away", async ({ desk }) => {
+	const { alpha } = setUpChain(desk);
+	const page = await desk.launch({ wikis: [] });
+	await desk.newMenu("Add existing wiki folder…");
+	await page.locator("#wiki-form [name=path]").fill(alpha);
+	await page.locator("#wiki-form [name=name]").fill("Alpha");
+	await page.locator("#save-dialog").click();
+	await expect(desk.row("Alpha").locator(".plugin-clash")).toHaveText("⚠ plugin clash");
+});

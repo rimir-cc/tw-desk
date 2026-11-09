@@ -77,22 +77,224 @@ function kindLabel(kind) {
 
 // ---------- Wikis tab ----------
 
+const COLLAPSED_KEY = "tw-desk.plugins.collapsed";
+let focusFolder = null; // path of the card to expand and show after the next render
+let draggedFolder = null;
+
+// Which cards are collapsed is a per-window convenience (localStorage may be unavailable)
+function collapsedFolders() {
+	try {
+		return new Set(JSON.parse(localStorage.getItem(COLLAPSED_KEY) || "[]"));
+	} catch (e) {
+		return new Set();
+	}
+}
+
+function saveCollapsed(set) {
+	try {
+		localStorage.setItem(COLLAPSED_KEY, JSON.stringify([...set]));
+	} catch (e) {
+		// not remembered
+	}
+}
+
+function folderLabel(folderPath) {
+	const folder = pstate.folders.find(f => pathKey(f.path) === pathKey(folderPath));
+	return folder ? folder.name : folderPath.split(/[\\/]/).filter(Boolean).pop();
+}
+
+function joinNames(names) {
+	return names.length > 1 ? names.slice(0, -1).join(", ") + " and " + names[names.length - 1] : names.join("");
+}
+
+// Info or warning for an entry that has the same plugin as another entry of this card's chain
+function problemMark(folder, index) {
+	const chain = folder.chain;
+	const problem = chain.problems.find(p => p.entries.includes(index));
+	if (!problem) {
+		return null;
+	}
+	if (problem.type === "clash") {
+		return el("span", { class: "badge clash", title: "Different versions of this plugin in this wiki's chain; the copy loaded last wins." }, "clash: " + clashText(problem, chain.entries, folderLabel));
+	}
+	const other = chain.entries[problem.entries.find(i => i !== index)];
+	const entry = chain.entries[index];
+	const text = pathKey(other.folder) === pathKey(entry.folder) ? "listed twice"
+		: other.chain.length ? "also " + chainLabel(other.chain, folderLabel) : "also listed by " + folder.name;
+	return el("span", { class: "badge duplicate", title: "Loaded more than once; the same version, so only one of them is needed." }, text);
+}
+
+function entryIndex(folder, predicate) {
+	return folder.chain ? folder.chain.entries.findIndex(predicate) : -1;
+}
+
+function originBadge(entry) {
+	if (entry.origin === "wiki") {
+		return el("span", { class: "badge wiki" }, "in wiki " + entry.version);
+	}
+	if (entry.origin === "missing") {
+		return el("span", { class: "badge missing", title: "Not bundled with TiddlyWiki and not in the store; TiddlyWiki will skip it." }, "missing");
+	}
+	return el("span", { class: "badge " + entry.origin }, entry.origin + " " + entry.version);
+}
+
+// Text for confirm() when other wikis load this folder, or null when nobody else is affected
+function removalQuestion(folder, title, name) {
+	const others = folder.usedBy.filter(n => !(folder.managed && n === folder.name));
+	if (!others.length) {
+		return null;
+	}
+	const wikis = pstate.folders.filter(f => f.managed && f.chain && pathKey(f.path) !== pathKey(folder.path))
+		.map(f => ({ name: f.name, path: f.path, entries: f.chain.entries }));
+	const impact = removalImpact(wikis, folder.path, title, pathKey);
+	if (!impact.lose.length && !impact.keep.length) {
+		return null;
+	}
+	const keeps = impact.keep.map(k => k.name + " keeps it: " + keepReason(wikis.find(w => w.name === k.name), k.by, folderLabel)).join("; ");
+	let text = "Remove " + name + " from " + folder.name + "?";
+	if (impact.lose.length) {
+		const one = impact.lose.length === 1;
+		text += " " + joinNames(impact.lose) + (one ? " includes " : " include ") + folder.name
+			+ (one ? " and loses it on its next restart" : " and lose it on their next restart") + (keeps ? " (" + keeps + ")." : ".");
+	} else {
+		text += " " + keeps + ".";
+	}
+	return text;
+}
+
+function cardHeader(folder, collapsed, toggle) {
+	const entries = folder.chain ? folder.chain.entries : [];
+	const own = entries.filter(e => !e.chain.length).length;
+	const inherited = entries.length - own;
+	const clash = folder.chain && folder.chain.problems.some(p => p.type === "clash");
+	const header = el("div", { class: "card-title", draggable: true, title: "Drag to change the order of the cards" },
+		el("button", { type: "button", class: "ghost toggle", title: collapsed ? "Expand" : "Collapse", onclick: toggle }, collapsed ? "▸" : "▾"),
+		el("strong", {}, folder.name),
+		folder.description ? el("span", { class: "folder-description" }, folder.description) : null,
+		el("span", { class: "muted small" }, folder.path),
+		el("span", { class: "muted small count" }, own + " own" + (inherited ? " · " + inherited + " from includes" : "")),
+		clash ? el("span", { class: "badge clash" }, "⚠ clash") : null,
+		folder.running ? el("span", { class: "badge wiki" }, "in use by a running wiki – restart to apply") : null);
+	header.addEventListener("dragstart", event => {
+		draggedFolder = folder.path;
+		event.dataTransfer.effectAllowed = "move";
+		event.dataTransfer.setData("text/plain", folder.name);
+	});
+	header.addEventListener("dragend", () => {
+		draggedFolder = null;
+		clearCardMarks();
+	});
+	return header;
+}
+
+function clearCardMarks() {
+	for (const card of document.querySelectorAll("#tab-wikis .card.drop-before, #tab-wikis .card.drop-after")) {
+		card.classList.remove("drop-before", "drop-after");
+	}
+}
+
+function dropPlace(card, event) {
+	const box = card.getBoundingClientRect();
+	return event.clientY < box.top + box.height / 2 ? "before" : "after";
+}
+
+function makeDropTarget(card, folder) {
+	card.addEventListener("dragover", event => {
+		if (!draggedFolder || pathKey(draggedFolder) === pathKey(folder.path)) {
+			return;
+		}
+		event.preventDefault();
+		event.dataTransfer.dropEffect = "move";
+		clearCardMarks();
+		card.classList.add("drop-" + dropPlace(card, event));
+	});
+	card.addEventListener("drop", event => {
+		const moved = draggedFolder;
+		draggedFolder = null;
+		clearCardMarks();
+		if (!moved || pathKey(moved) === pathKey(folder.path)) {
+			return;
+		}
+		event.preventDefault();
+		const order = pstate.folders.map(f => f.path).filter(p => pathKey(p) !== pathKey(moved));
+		const at = order.findIndex(p => pathKey(p) === pathKey(folder.path)) + (dropPlace(card, event) === "after" ? 1 : 0);
+		order.splice(at, 0, moved);
+		pluginAction(async () => {
+			await papi.setOrder(order);
+			return "";
+		});
+	});
+}
+
+function inheritedSection(folder) {
+	const chain = folder.chain;
+	if (!chain) {
+		return null;
+	}
+	const rows = [];
+	chain.entries.forEach((entry, index) => {
+		if (!entry.chain.length) {
+			return;
+		}
+		rows.push(el("tr", {},
+			el("td", {}, (entry.source === "stored" ? entry.title : kindLabel(entry.kind) + entry.name), el("div", { class: "desc" }, chainLabel(entry.chain, folderLabel))),
+			el("td", {}, originBadge(entry), " ", problemMark(folder, index)),
+			el("td", { class: "actions-cell muted small" }, "change it on " + folderLabel(entry.folder) + "'s card")));
+	});
+	const errors = chain.errors.map(e => el("div", { class: "error small" }, e.reason === "loop"
+		? "Include loop: " + e.path + " is already loaded (skipped)"
+		: "Included folder not found: " + e.path));
+	if (!rows.length && !errors.length) {
+		return null;
+	}
+	return el("div", { class: "inherited" }, el("h3", {}, "From included wikis"), errors, rows.length ? el("table", { class: "plugin-table" }, rows) : null);
+}
+
 function renderWikisTab() {
 	const panel = $("#tab-wikis");
+	const collapsed = collapsedFolders();
+	if (focusFolder) {
+		collapsed.delete(pathKey(focusFolder));
+		saveCollapsed(collapsed);
+	}
+	const setAll = value => {
+		const set = value ? new Set(pstate.folders.map(f => pathKey(f.path))) : new Set();
+		saveCollapsed(set);
+		renderWikisTab();
+	};
 	panel.replaceChildren(el("p", { class: "muted small" },
-		"Plugins listed in each folder's tiddlywiki.info. Included folders (like _shared) pass their plugins on to every wiki that includes them. Changes apply when a wiki is (re)started."));
+		"Plugins listed in each folder's tiddlywiki.info, and those its included folders (and their includes) pass on. Changes apply when a wiki is (re)started. Drag a card's title to reorder."),
+	el("div", { class: "card-tools" },
+		el("button", { type: "button", class: "ghost", onclick: () => setAll(false) }, "Expand all"),
+		el("button", { type: "button", class: "ghost", onclick: () => setAll(true) }, "Collapse all")));
+	let focusCard = null;
 	for (const folder of pstate.folders) {
-		const card = el("div", { class: "card" });
-		card.append(el("div", { class: "card-title" },
-			el("strong", {}, folder.name),
-			el("span", { class: "muted small" }, folder.path),
-			folder.running ? el("span", { class: "badge wiki" }, "in use by a running wiki – restart to apply") : null));
+		const isCollapsed = collapsed.has(pathKey(folder.path));
+		const card = el("div", { class: "card" + (isCollapsed ? " collapsed" : "") });
+		card.dataset.path = folder.path;
+		makeDropTarget(card, folder);
+		if (focusFolder && pathKey(focusFolder) === pathKey(folder.path)) {
+			focusCard = card;
+		}
+		card.append(cardHeader(folder, isCollapsed, () => {
+			const set = collapsedFolders();
+			if (isCollapsed) {
+				set.delete(pathKey(folder.path));
+			} else {
+				set.add(pathKey(folder.path));
+			}
+			saveCollapsed(set);
+			renderWikisTab();
+		}));
+		panel.append(card);
+		if (isCollapsed) {
+			continue;
+		}
 		if (!folder.managed || folder.usedBy.length > 1) {
 			card.append(el("div", { class: "muted small" }, "loaded by: " + folder.usedBy.join(", ")));
 		}
 		if (folder.error) {
 			card.append(el("div", { class: "error small" }, folder.error));
-			panel.append(card);
 			continue;
 		}
 		const table = el("table", { class: "plugin-table" });
@@ -101,11 +303,16 @@ function renderWikisTab() {
 			for (const name of names) {
 				const found = lookup(kind, name);
 				const title = found.plugin ? found.plugin.title : "$:/" + KIND_KEYS[kind] + "/" + name;
+				const index = entryIndex(folder, e => !e.chain.length && e.source === "list" && e.kind === kind && e.name === name);
 				table.append(el("tr", {},
 					el("td", {}, kindLabel(kind) + name, found.plugin && found.plugin.description ? el("div", { class: "desc" }, found.plugin.description) : null),
-					el("td", {}, el("span", { class: "badge " + found.source, title: found.source === "missing" ? "Not bundled with TiddlyWiki and not in the store; TiddlyWiki will skip it." : "" }, found.label)),
+					el("td", {}, el("span", { class: "badge " + found.source, title: found.source === "missing" ? "Not bundled with TiddlyWiki and not in the store; TiddlyWiki will skip it." : "" }, found.label), index >= 0 ? [" ", problemMark(folder, index)] : null),
 					el("td", { class: "actions-cell" }, demoButtons(title, found.plugin ? { version: found.plugin.version, what: "this wiki uses" } : null), actionButton("Remove", async () => {
 						if (ESSENTIAL.includes(kind + "|" + name) && !confirm(name + " is needed to serve this wiki from TW Desk. Remove anyway?")) {
+							return "";
+						}
+						const question = removalQuestion(folder, title, name);
+						if (question && !confirm(question)) {
 							return "";
 						}
 						await papi.setList(folder.path, kind, names.filter(n => n !== name));
@@ -141,9 +348,10 @@ function renderWikisTab() {
 			const storedTable = el("table", { class: "plugin-table" });
 			for (const plugin of folder.stored) {
 				const inStore = pstate.store.find(p => p.title === plugin.title);
+				const index = entryIndex(folder, e => !e.chain.length && e.source === "stored" && e.title === plugin.title);
 				storedTable.append(el("tr", {},
 					el("td", {}, plugin.title, el("div", { class: "desc" }, plugin.description)),
-					el("td", {}, el("span", { class: "badge wiki" }, "in wiki " + plugin.version), inStore ? el("span", { class: "badge store" }, " store " + inStore.version) : null),
+					el("td", {}, el("span", { class: "badge wiki" }, "in wiki " + plugin.version), inStore ? el("span", { class: "badge store" }, " store " + inStore.version) : null, index >= 0 ? [" ", problemMark(folder, index)] : null),
 					el("td", { class: "actions-cell" }, demoButtons(plugin.title, { version: plugin.version, what: "this wiki has" }), actionButton("Move to store", async () => {
 						if (!confirm("Move " + plugin.title + " into the shared store?\n\nIt is then listed in " + folder.name + "'s tiddlywiki.info, and its file is moved from the wiki into TW Desk's backup folder." + (inStore ? "\n\nThe store already has version " + inStore.version + "; it will be replaced by " + plugin.version + "." : ""))) {
 							return "";
@@ -154,7 +362,11 @@ function renderWikisTab() {
 			}
 			card.append(storedTable);
 		}
-		panel.append(card);
+		card.append(inheritedSection(folder));
+	}
+	if (focusCard) {
+		focusFolder = null;
+		focusCard.scrollIntoView({ block: "start" });
 	}
 }
 
@@ -728,8 +940,10 @@ async function installFromShowcase(showcase, entry, update) {
 }
 
 // Opens the Plugins window on a tab (e.g. from a showcase in the main window)
-function openPluginsTab(tab) {
+// focusPath: expand that folder's card and scroll to it (Wikis tab)
+function openPluginsTab(tab, focusPath) {
 	activeTab = tab;
+	focusFolder = focusPath || null;
 	return run(async () => {
 		showMessage("");
 		search.indexes = null;

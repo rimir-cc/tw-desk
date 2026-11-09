@@ -263,3 +263,15 @@ textarea, input:not([type=checkbox]):not([type=radio]) {
 #settings-form fieldset.stacked { margin-bottom: 4px; }
 #settings-form fieldset.stacked + small { display: block; margin-bottom: 12px; }
 .git-chip.link-chip { border: 1px solid var(--starting); }
+
+/* Plugins → Wikis: collapsible, reorderable cards; inherited plugins; duplicates and clashes */
+.card-tools { display: flex; gap: 6px; justify-content: flex-end; margin-bottom: 6px; }
+.card .card-title { cursor: grab; }
+.card .card-title .toggle { padding: 0 4px; min-width: 0; }
+.card.collapsed { padding-top: 6px; padding-bottom: 6px; }
+.card.drop-before { box-shadow: 0 -3px 0 var(--running); }
+.card.drop-after { box-shadow: 0 3px 0 var(--running); }
+.folder-description { font-size: 12px; font-style: italic; }
+.inherited .plugin-table td { color: var(--muted); }
+.badge.clash { color: var(--error); border-color: var(--error); }
+.badge.duplicate { color: var(--muted); border-style: dashed; }

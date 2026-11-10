@@ -1,6 +1,6 @@
 # Data folder: your TW Desk in one movable, version-controlled place – design
 
-Date: 2026-11-10 · Status: draft, for review
+Date: 2026-11-10 · Status: shipped in 0.2.24
 
 ## Why
 

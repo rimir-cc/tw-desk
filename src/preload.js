@@ -12,6 +12,10 @@ contextBridge.exposeInMainWorld("twDesk", {
 		checkNow: () => ipcRenderer.invoke("git-check-now")
 	},
 	pickFolder: title => ipcRenderer.invoke("pick-folder", title),
+	dataFolder: {
+		setup: (mode, target) => ipcRenderer.invoke("data-folder-setup", mode, target),
+		replaceSummary: () => ipcRenderer.invoke("data-folder-replace-summary")
+	},
 	pickFile: (title, filters) => ipcRenderer.invoke("pick-file", title, filters),
 	saveWiki: wiki => ipcRenderer.invoke("save-wiki", wiki),
 	createWiki: input => ipcRenderer.invoke("create-wiki", input),

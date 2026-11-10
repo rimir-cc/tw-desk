@@ -180,6 +180,148 @@ function saveConfig(action) {
 // Filled in with the data folder's auto-commit
 function dataChanged() {}
 
+// Stops all running wikis and waits until they have stopped; returns their ids
+async function stopAllWikis() {
+	const running = config.wikis.filter(w => ["running", "starting"].includes(serverState(w.id).status)).map(w => w.id);
+	for (const id of running) {
+		stopWiki(id);
+	}
+	const started = Date.now();
+	while (running.some(id => ["running", "starting", "stopping"].includes(serverState(id).status)) && Date.now() - started < 30000) {
+		await new Promise(resolve => setTimeout(resolve, 200));
+	}
+	return running;
+}
+
+// Switches to the data folder dir (config, store and web are read from there)
+function useDataDir(dir) {
+	dataDir = path.resolve(dir);
+	dataSetupNeeded = null;
+	lostDataDir = null;
+	plugins.init(dataDir, userDataDir());
+	loadConfig();
+	refreshPluginClashes();
+	checkGit({ fetch: false });
+	pushState();
+}
+
+// The parts of the current setup that "Use existing data folder…" would replace
+function replaceSummary() {
+	return { wikis: config.wikis.length, webWikis: config.webWikis.length, plugins: plugins.listStore().length };
+}
+
+// The setup files TW Desk kept in the user-data folder before there was a data folder
+function removeLegacySetup() {
+	for (const entry of dataFolder.DATA_ENTRIES) {
+		fs.rmSync(path.join(userDataDir(), entry), { recursive: true, force: true });
+	}
+}
+
+async function initDataRepo(dir) {
+	if (gitState.version === undefined) {
+		gitState.version = await git.version();
+	}
+	if (gitState.version) {
+		await git.init(dir, { ignore: dataFolder.DATA_GITIGNORE, message: "Initial TW Desk data" });
+	} else if (!fs.existsSync(path.join(dir, ".gitignore"))) {
+		fs.writeFileSync(path.join(dir, ".gitignore"), dataFolder.DATA_GITIGNORE);
+	}
+}
+
+// A new data folder at target with the current setup (migrated from userData, or empty)
+async function createDataFolder(target) {
+	const state = dataFolder.folderState(target);
+	if (state === "other") {
+		throw new Error("This folder isn't empty. Choose an empty folder, or “Use existing data folder…” for a TW Desk data folder.");
+	}
+	if (state === "data") {
+		return useExistingDataFolder(target);
+	}
+	try {
+		dataFolder.copyData(userDataDir(), target, ["store", "web"]);
+		const { shared, local } = dataFolder.splitLocal(config);
+		fs.writeFileSync(path.join(target, "config.json"), JSON.stringify(dataFolder.storeConfigPaths(shared, target), null, 2));
+		writeFileSafely(localPath(), JSON.stringify(local, null, 2));
+		await initDataRepo(target);
+		dataFolder.writePointer(userDataDir(), target);
+	} catch (e) {
+		// Leave nothing half-made behind (the folder was missing or empty before)
+		if (state === "missing") {
+			fs.rmSync(target, { recursive: true, force: true });
+		} else {
+			for (const name of fs.existsSync(target) ? fs.readdirSync(target) : []) {
+				fs.rmSync(path.join(target, name), { recursive: true, force: true });
+			}
+		}
+		throw e;
+	}
+	removeLegacySetup();
+	useDataDir(target);
+	return {};
+}
+
+// The setup in target replaces the current one (the renderer warned about it)
+async function useExistingDataFolder(target) {
+	const state = dataFolder.folderState(target);
+	if (state === "empty" || state === "missing") {
+		return createDataFolder(target);
+	}
+	if (state !== "data") {
+		throw new Error("This isn't a TW Desk data folder (it has no config.json): " + target);
+	}
+	const migrating = dataSetupNeeded === "migrate";
+	await stopAllWikis();
+	fs.rmSync(localPath(), { force: true });
+	dataFolder.writePointer(userDataDir(), target);
+	if (migrating) {
+		removeLegacySetup();
+	}
+	useDataDir(target);
+	return { replaced: true };
+}
+
+let startupWikisDone = false;
+
+// Start-time binary policy and autostart: right away, or once the data folder has been chosen
+async function startupWikis() {
+	if (startupWikisDone || dataSetupNeeded) {
+		return;
+	}
+	startupWikisDone = true;
+	// Before autostart, while no wiki runs (a wiki started meanwhile by a link is skipped)
+	for (const wiki of config.wikis.slice()) {
+		if (quitting) {
+			return;
+		}
+		await applyBinaryPolicyLogged(wiki);
+	}
+	if (quitting) {
+		return;
+	}
+	scanBinaries();
+	scheduleBinaryScans();
+	for (const wiki of config.wikis) {
+		if (wiki.autostart) {
+			startWiki(wiki.id);
+		}
+	}
+}
+
+ipcMain.handle("data-folder-replace-summary", () => replaceSummary());
+
+ipcMain.handle("data-folder-setup", async (event, mode, target) => {
+	if (!dataSetupNeeded) {
+		throw new Error("The data folder is already set up.");
+	}
+	if (typeof target !== "string" || !target.trim() || !path.isAbsolute(target.trim())) {
+		throw new Error("Please choose a folder (a full path).");
+	}
+	const folder = path.resolve(target.trim());
+	const result = mode === "existing" ? await useExistingDataFolder(folder) : await createDataFolder(folder);
+	startupWikis();
+	return result;
+});
+
 function findWiki(id) {
 	const wiki = config.wikis.find(w => w.id === id);
 	if (!wiki) {
@@ -296,7 +438,7 @@ function snapshot() {
 		twVersion: TW_VERSION,
 		configPath: configPath(),
 		configError,
-		dataFolder: { path: dataDir, setup: dataSetupNeeded, lost: lostDataDir },
+		dataFolder: { path: dataDir, setup: dataSetupNeeded, lost: lostDataDir, suggestion: dataSetupNeeded ? dataFolder.suggestLocation(config.wikis.map(w => w.path), app.getPath("documents"), folderKey) : null },
 		installDir: app.isPackaged ? path.dirname(process.execPath) : app.getAppPath(),
 		platform: process.platform,
 		caseInsensitivePaths: CASE_INSENSITIVE_PATHS,
@@ -3096,23 +3238,7 @@ if (!app.requestSingleInstanceLock()) {
 		startRouter();
 		registerScheme();
 		followArgv(process.argv);
-		// Before autostart, while no wiki runs (a wiki started meanwhile by a link is skipped)
-		for (const wiki of config.wikis.slice()) {
-			if (quitting) {
-				return;
-			}
-			await applyBinaryPolicyLogged(wiki);
-		}
-		if (quitting) {
-			return;
-		}
-		scanBinaries();
-		scheduleBinaryScans();
-		for (const wiki of config.wikis) {
-			if (wiki.autostart) {
-				startWiki(wiki.id);
-			}
-		}
+		await startupWikis();
 	});
 
 	app.on("open-url", (event, url) => {

@@ -1472,6 +1472,101 @@ function adaptPlaceholders(platform) {
 	}
 }
 
+// ---------- data folder: first start ----------
+
+const DATA_SETUP_TEXTS = {
+	migrate: "TW Desk now keeps your setup – wikis list, settings, plugin store, web wikis – in a data folder you choose, so you can put it under git and move it. Temporary files stay where they are.",
+	new: "Where should TW Desk keep your setup?",
+	lost: path => "Your data folder " + path + " wasn't found. Choose it again, use another one, or create a new one."
+};
+let dataSetupShown = null;
+
+function plural(count, one, many) {
+	return count + " " + (count === 1 ? one : many);
+}
+
+// "Your current 2 wikis and 3 store plugins are replaced by the setup in X. …", or null when there is nothing to replace
+function replaceWarning(summary, target) {
+	const parts = [];
+	if (summary.wikis) {
+		parts.push(plural(summary.wikis, "wiki", "wikis"));
+	}
+	if (summary.webWikis) {
+		parts.push(plural(summary.webWikis, "web wiki", "web wikis"));
+	}
+	if (summary.plugins) {
+		parts.push(plural(summary.plugins, "store plugin", "store plugins"));
+	}
+	if (!parts.length) {
+		return null;
+	}
+	const list = parts.length > 1 ? parts.slice(0, -1).join(", ") + " and " + parts[parts.length - 1] : parts[0];
+	const single = parts.length === 1 && /^1 /.test(parts[0]);
+	return "Your current " + list + (single ? " is" : " are") + " replaced by the setup in " + target + ". Wiki folders themselves are not touched.";
+}
+
+function renderDataSetup() {
+	const dialogEl = $("#data-setup-dialog");
+	const needed = state.dataFolder && state.dataFolder.setup;
+	if (!needed) {
+		if (dialogEl.open) {
+			dialogEl.close();
+		}
+		dataSetupShown = null;
+		return;
+	}
+	if (dataSetupShown !== needed) {
+		dataSetupShown = needed;
+		const text = DATA_SETUP_TEXTS[needed];
+		$("#data-setup-text").textContent = typeof text === "function" ? text(state.dataFolder.lost) : text;
+		$("#data-setup-path").value = state.dataFolder.suggestion || "";
+		$("#data-setup-error").hidden = true;
+	}
+	if (!dialogEl.open) {
+		dialogEl.showModal();
+	}
+}
+
+function dataSetupError(e) {
+	$("#data-setup-error").textContent = cleanError(e);
+	$("#data-setup-error").hidden = false;
+}
+
+// Esc doesn't close it: TW Desk needs a data folder
+$("#data-setup-dialog").addEventListener("cancel", event => event.preventDefault());
+
+$("#data-setup-choose").addEventListener("click", async () => {
+	const folder = await api.pickFolder("Data folder");
+	if (folder) {
+		$("#data-setup-path").value = folder;
+	}
+});
+
+$("#data-setup-form").addEventListener("submit", async event => {
+	event.preventDefault();
+	try {
+		await api.dataFolder.setup("create", $("#data-setup-path").value);
+	} catch (e) {
+		dataSetupError(e);
+	}
+});
+
+$("#data-setup-existing").addEventListener("click", async () => {
+	const folder = await api.pickFolder("Existing data folder");
+	if (!folder) {
+		return;
+	}
+	try {
+		const warning = state.dataFolder.setup === "migrate" ? replaceWarning(await api.dataFolder.replaceSummary(), folder) : null;
+		if (warning && !confirm(warning)) {
+			return;
+		}
+		await api.dataFolder.setup("existing", folder);
+	} catch (e) {
+		dataSetupError(e);
+	}
+});
+
 function applyState(newState) {
 	if (!state.platform) {
 		adaptPlaceholders(newState.platform);
@@ -1481,6 +1576,7 @@ function applyState(newState) {
 	$("#config-path").textContent = state.configPath;
 	$("#install-dir").textContent = state.installDir;
 	render();
+	renderDataSetup();
 }
 
 // Only once every script is loaded: render() uses functions from git-ui.js and the others

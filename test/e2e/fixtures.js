@@ -216,6 +216,14 @@ class Desk {
 		return this.launch(config);
 	}
 
+	// Ends this TW Desk and starts it again with the same user-data folder
+	async relaunch(config = {}, options = {}) {
+		this.dialogs = this.dialogs.concat((await this.page.evaluate(() => window.testDialogs).catch(() => null)) || []);
+		await this.app.context().tracing.stop();
+		await this.app.close();
+		return this.launch(config, options);
+	}
+
 	// Next answer of the folder/file picker
 	pick(file) {
 		return this.app.evaluate((electron, picked) => globalThis.twDeskTest.picks.push(picked), file);

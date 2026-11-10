@@ -259,6 +259,25 @@
 	</form>
 </dialog>
 
+<dialog id="data-setup-dialog">
+	<form id="data-setup-form" method="dialog">
+		<h2>Your data folder</h2>
+		<p id="data-setup-text"></p>
+		<label>Folder
+			<span class="row">
+				<input id="data-setup-path" name="path" required>
+				<button type="button" id="data-setup-choose">Choose…</button>
+			</span>
+		</label>
+		<small class="muted">It holds your wiki list, settings, plugin store and web wikis, and gets its own git repository. Temporary files, logs and backups stay in TW Desk's own folder.</small>
+		<p id="data-setup-error" class="error" hidden></p>
+		<div class="actions">
+			<button type="button" id="data-setup-existing" title="A data folder from another computer or an earlier installation (e.g. a clone of your data repository)">Use existing data folder…</button>
+			<button type="submit" class="primary" id="data-setup-create">Create here</button>
+		</div>
+	</form>
+</dialog>
+
 <dialog id="setup-dialog">
 	<form id="setup-form" method="dialog">
 		<h2 id="setup-title">Export setup</h2>

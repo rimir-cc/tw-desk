@@ -177,11 +177,65 @@ function saveConfig(action) {
 	}
 }
 
-// Filled in with the data folder's auto-commit
-function dataChanged() {}
+// ---------- data folder: auto-commit ----------
 
-async function commitData() {
-	return false;
+// Changes are committed once they have settled (TW Desk never pushes on its own)
+const DATA_COMMIT_DELAY = Number(process.env.TW_DESK_DATA_COMMIT_DELAY) || 90000;
+const QUIT_COMMIT_TIMEOUT = 10000;
+let pendingActions = [];
+let dataCommitTimer = null;
+let dataCommitting = null;
+
+// Something in the data folder changed (action: what, for the commit message)
+function dataChanged(action) {
+	if (!dataDir) {
+		return;
+	}
+	if (action) {
+		pendingActions.push(action);
+	}
+	clearTimeout(dataCommitTimer);
+	dataCommitTimer = setTimeout(() => {
+		dataCommitTimer = null;
+		commitData();
+	}, DATA_COMMIT_DELAY);
+}
+
+// Commits the data folder's changes, unless it has no own repository or isn't in a state to commit in (behind its
+// remote, merging, conflicts, detached). Returns whether a commit was made.
+function commitData() {
+	clearTimeout(dataCommitTimer);
+	dataCommitTimer = null;
+	const run = async () => {
+		if (gitState.version === undefined) {
+			gitState.version = await git.version();
+		}
+		if (!gitState.version || !dataDir || !dataFolder.ownRepo(dataDir)) {
+			return false;
+		}
+		const dir = dataDir;
+		try {
+			const status = await git.status(dir);
+			if (status.behind > 0 || status.merging || status.conflicts.length || status.detached) {
+				return false;
+			}
+			if (!status.changed.length) {
+				pendingActions = [];
+				return false;
+			}
+			const actions = pendingActions;
+			const done = await git.commit(dir, dataFolder.commitMessage(actions, status.changed));
+			pendingActions = pendingActions.slice(actions.length);
+			checkGit({ folders: [dir] });
+			return done;
+		} catch (e) {
+			console.error("Committing the data folder failed:", e.message);
+			return false;
+		}
+	};
+	// One commit at a time
+	dataCommitting = (dataCommitting || Promise.resolve()).then(run, run);
+	return dataCommitting;
 }
 
 let movedFrom = null; // the data folder before the last move (only that one may be removed)
@@ -996,6 +1050,11 @@ async function runGitCheck(options) {
 	lastLocalCheck = Date.now();
 	gitState.checking = false;
 	pushState();
+	// Changes nobody told TW Desk about (hand edits) are committed too
+	const dataStatus = dataDir && gitFolderStatus.get(folderKey(dataDir));
+	if (dataStatus && dataStatus.repo && dataStatus.changedCount > 0 && !dataCommitTimer) {
+		dataChanged();
+	}
 }
 
 function scheduleGitChecks() {
@@ -1736,7 +1795,7 @@ async function createWiki(input) {
 		wiki.importedFrom = { source: htmlUrl || htmlFile, date: today };
 	}
 	config.wikis.push(wiki);
-	saveConfig();
+	saveConfig("Added wiki " + wiki.name);
 	pushState();
 	// The wiki exists either way; without a repository its git chip offers to create one
 	if (input.gitInit && gitState.version) {
@@ -1783,7 +1842,7 @@ ipcMain.handle("save-settings", (event, input) => {
 	config.git = { interval, fetch: !!input.gitFetch, staleHours, autoCommitOnStop: !!input.gitAutoCommit };
 	config.webCheck = !!input.webCheck;
 	config.links = { style: input.linkStyle === "http" ? "http" : "scheme", port: linkPort, router: !!input.linkRouter, scheme: !!input.linkScheme, plugin: !!input.linkPlugin };
-	saveConfig();
+	saveConfig("Changed settings");
 	scheduleGitChecks();
 	scheduleWebChecks();
 	startRouter();
@@ -1833,7 +1892,7 @@ ipcMain.handle("save-wiki", (event, input) => {
 		}
 		config.wikis[index] = wiki;
 	}
-	saveConfig();
+	saveConfig((index === -1 ? "Added wiki " : "Changed wiki ") + wiki.name);
 	pushState();
 	refreshPluginClashes();
 	checkGit({ fetch: false });
@@ -2008,7 +2067,7 @@ function linkShowcase(id, title, linked) {
 	} else {
 		delete link.linkedPlugins;
 	}
-	saveConfig();
+	saveConfig("Linked plugins of " + link.name);
 	pushState();
 }
 
@@ -2081,7 +2140,7 @@ function setFolderDescription(folderPath, text) {
 		descriptions[folder.path] = description;
 	}
 	config.folderDescriptions = descriptions;
-	saveConfig();
+	saveConfig("Described " + folderDisplayName(folder.path));
 	pushState();
 }
 
@@ -2145,13 +2204,13 @@ ipcMain.handle("plugins-add-library", async (event, url) => {
 		throw new Error("This library is already in the list.");
 	}
 	config.libraries.push(library);
-	saveConfig();
+	saveConfig("Added library " + library.url);
 	return library;
 });
 
 ipcMain.handle("plugins-remove-library", (event, url) => {
 	config.libraries = config.libraries.filter(l => l.url !== url);
-	saveConfig();
+	saveConfig("Removed library " + url);
 });
 
 ipcMain.handle("plugins-library-index", (event, url, refresh) => plugins.libraryIndex(findLibrary(url), refresh));
@@ -2169,6 +2228,7 @@ ipcMain.handle("plugins-install", async (event, url, title) => {
 	const result = await (url.startsWith(SHOWCASE_PREFIX)
 		? installFromShowcase(url.slice(SHOWCASE_PREFIX.length), title)
 		: plugins.installFromLibrary(findLibrary(url), title));
+	dataChanged("Installed " + title + (result && result.version ? " " + result.version : ""));
 	refreshPluginClashes();
 	return result;
 });
@@ -2186,6 +2246,7 @@ ipcMain.handle("plugins-remove", (event, kind, name) => {
 		throw new Error("Still used by: " + users.map(f => f.name).join(", ") + ". Remove it from those wikis first.");
 	}
 	plugins.removeFromStore(kind, name);
+	dataChanged("Removed " + plugins.titleOf(kind, name) + " from the store");
 	refreshPluginClashes();
 });
 
@@ -2209,7 +2270,7 @@ ipcMain.handle("plugins-set-order", (event, paths) => {
 		throw new Error("No folder order given.");
 	}
 	config.pluginsFolderOrder = paths.filter(p => typeof p === "string" && p);
-	saveConfig();
+	saveConfig("Reordered plugin cards");
 });
 
 ipcMain.handle("plugins-move-to-store", (event, folderPath, file) => {
@@ -2218,6 +2279,7 @@ ipcMain.handle("plugins-move-to-store", (event, folderPath, file) => {
 		throw new Error("Stop the wikis using this folder first: " + folder.usedBy.join(", "));
 	}
 	const result = plugins.moveToStore(folder.path, file);
+	dataChanged("Moved " + ((result && result.title) || file) + " to the store");
 	refreshPluginClashes();
 	return result;
 });
@@ -2225,8 +2287,9 @@ ipcMain.handle("plugins-move-to-store", (event, folderPath, file) => {
 ipcMain.handle("remove-wiki", (event, id) => {
 	stopWiki(id);
 	dropRecord(id);
+	const removed = config.wikis.find(w => w.id === id);
 	config.wikis = config.wikis.filter(w => w.id !== id);
-	saveConfig();
+	saveConfig(removed ? "Removed wiki " + removed.name : undefined);
 	pushState();
 });
 
@@ -2290,8 +2353,9 @@ ipcMain.handle("delete-wiki", async (event, id) => {
 	}
 	servers.delete(id);
 	dropRecord(id);
+	const deleted = config.wikis.find(w => w.id === id);
 	config.wikis = config.wikis.filter(w => w.id !== id);
-	saveConfig();
+	saveConfig(deleted ? "Deleted wiki " + deleted.name : undefined);
 	pushState();
 	checkGit({ fetch: false });
 });
@@ -2309,7 +2373,7 @@ ipcMain.handle("move-wiki", (event, id, delta) => {
 	}
 	if (target >= 0 && target < config.wikis.length) {
 		[config.wikis[index], config.wikis[target]] = [config.wikis[target], config.wikis[index]];
-		saveConfig();
+		saveConfig("Reordered wikis");
 		pushState();
 	}
 });
@@ -2343,7 +2407,7 @@ ipcMain.handle("place-wiki", (event, id, group, beforeId) => {
 		target = last === -1 ? config.wikis.length : last + 1;
 	}
 	config.wikis.splice(target, 0, wiki);
-	saveConfig();
+	saveConfig("Reordered wikis");
 	pushState();
 });
 
@@ -2359,7 +2423,7 @@ ipcMain.handle("save-group", (event, input) => {
 	} else {
 		config.groups.push({ id: crypto.randomUUID(), name });
 	}
-	saveConfig();
+	saveConfig((input.id ? "Renamed group " : "Added group ") + name);
 	pushState();
 });
 
@@ -2505,7 +2569,8 @@ async function saveSnapshot(id) {
 	const date = new Date().toISOString();
 	link.snapshot = { date, size: index.size, tiddlers: index.tiddlers ? Object.keys(index.tiddlers).length : null, twVersion: index.twVersion };
 	link.check = { date, result: "same" };
-	saveConfig();
+	saveConfig("Saved snapshot of " + link.name);
+	dataChanged("Saved snapshot of " + link.name);
 	const win = snapshotWindows.get(id);
 	if (win && !win.isDestroyed()) {
 		win.loadFile(file);
@@ -2595,7 +2660,7 @@ ipcMain.handle("save-web-wiki", (event, input) => {
 	} else {
 		config.webWikis.push(link);
 	}
-	saveConfig();
+	saveConfig((previous ? "Changed web wiki " : "Added web wiki ") + link.name);
 	pushState();
 	// Remember the version as of now, to tell later whether the site changed
 	if (!previous || previous.url !== link.url) {
@@ -2606,8 +2671,10 @@ ipcMain.handle("save-web-wiki", (event, input) => {
 });
 
 ipcMain.handle("remove-web-wiki", (event, id) => {
+	const removedLink = config.webWikis.find(l => l.id === id);
 	config.webWikis = config.webWikis.filter(l => l.id !== id);
-	saveConfig();
+	saveConfig(removedLink ? "Removed web wiki " + removedLink.name : undefined);
+	dataChanged();
 	const win = snapshotWindows.get(id);
 	if (win && !win.isDestroyed()) {
 		win.close();
@@ -2636,7 +2703,7 @@ ipcMain.handle("move-web-wiki", (event, id, delta) => {
 	const target = index + delta;
 	if (index !== -1 && target >= 0 && target < config.webWikis.length) {
 		[config.webWikis[index], config.webWikis[target]] = [config.webWikis[target], config.webWikis[index]];
-		saveConfig();
+		saveConfig("Reordered web wikis");
 		pushState();
 	}
 });
@@ -2663,13 +2730,14 @@ ipcMain.handle("set-group-collapsed", (event, id, collapsed) => {
 
 // The group's wikis stay in the list, ungrouped
 ipcMain.handle("remove-group", (event, id) => {
+	const removedGroup = config.groups.find(g => g.id === id);
 	config.groups = config.groups.filter(g => g.id !== id);
 	for (const wiki of config.wikis) {
 		if (wiki.group === id) {
 			delete wiki.group;
 		}
 	}
-	saveConfig();
+	saveConfig(removedGroup ? "Removed group " + removedGroup.name : undefined);
 	pushState();
 });
 
@@ -3274,7 +3342,8 @@ async function runImport(base, choices) {
 		}
 	}
 
-	saveConfig();
+	saveConfig("Imported a setup");
+	dataChanged("Imported a setup");
 	pushState();
 	refreshPluginClashes();
 	checkGit({ fetch: false });
@@ -3349,7 +3418,24 @@ if (!app.requestSingleInstanceLock()) {
 		app.whenReady().then(() => followArgv([url]));
 	});
 
-	app.on("before-quit", () => {
+	let quitCommit = "none"; // "committing" | "done"
+	app.on("before-quit", event => {
+		// Commit what's pending first (at most 10 s), then quit for real; quitting again meanwhile (e.g. when the last
+		// window closes) waits too
+		if (quitCommit === "committing") {
+			event.preventDefault();
+			return;
+		}
+		if (quitCommit === "none" && dataDir && (dataCommitTimer || pendingActions.length)) {
+			event.preventDefault();
+			quitCommit = "committing";
+			Promise.race([commitData(), new Promise(resolve => setTimeout(resolve, QUIT_COMMIT_TIMEOUT))]).finally(() => {
+				quitCommit = "done";
+				app.quit();
+			});
+			return;
+		}
+		quitCommit = "done";
 		quitting = true;
 		for (const id of servers.keys()) {
 			stopWiki(id);

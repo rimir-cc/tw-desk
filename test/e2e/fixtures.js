@@ -224,6 +224,16 @@ class Desk {
 		return this.launch(config, options);
 	}
 
+	// Quits TW Desk the way the user does (closing the main window), and waits until it has exited
+	async quit() {
+		this.dialogs = this.dialogs.concat((await this.page.evaluate(() => window.testDialogs).catch(() => null)) || []);
+		await this.app.context().tracing.stop();
+		const exited = new Promise(resolve => this.app.process().once("exit", resolve));
+		await this.page.evaluate(() => window.close()).catch(() => {});
+		await exited;
+		this.app = null;
+	}
+
 	// Next answer of the folder/file picker
 	pick(file) {
 		return this.app.evaluate((electron, picked) => globalThis.twDeskTest.picks.push(picked), file);

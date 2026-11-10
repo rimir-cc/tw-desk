@@ -246,3 +246,88 @@ test("data folder: inside another repository it shows no repository and gets its
 	expect(fs.readFileSync(path.join(data, ".gitignore"), "utf8")).toBe("*.tmp\n");
 	desk.takeDialogs();
 });
+
+// ---------- auto-commit ----------
+
+const commitCount = dir => Number(sh(dir, "rev-list", "--count", "HEAD"));
+const lastSubject = dir => sh(dir, "log", "-1", "--format=%s");
+// The startup changes (config.json written by the test) are committed on their own first
+const settled = async dir => expect.poll(() => sh(dir, "status", "--porcelain"), { timeout: 20000 }).toBe("");
+
+async function launchWithRepo(desk, config = {}, delay = "500") {
+	const data = path.join(desk.root, "data");
+	gitRepo(data);
+	desk.useDataDir(data);
+	await desk.launch(config, { env: { TW_DESK_DATA_COMMIT_DELAY: delay } });
+	return data;
+}
+
+test("data folder: auto-commit after a change, with a readable message", async ({ desk }) => {
+	const alpha = desk.wiki("alpha");
+	const data = await launchWithRepo(desk, { wikis: [{ name: "Alpha", path: alpha }] });
+	await settled(data);
+	const before = commitCount(data);
+	await desk.page.evaluate(async folder => {
+		await window.twDesk.saveGroup({ name: "Work" });
+		await window.twDesk.plugins.setOrder([folder]);
+	}, alpha);
+	await expect.poll(() => lastSubject(data), { timeout: 20000 }).toBe("Added group Work · Reordered plugin cards");
+	expect(commitCount(data)).toBe(before + 1);
+});
+
+test("data folder: using the app makes no commit", async ({ desk }) => {
+	const alpha = desk.wiki("alpha");
+	const data = await launchWithRepo(desk, { wikis: [{ name: "Alpha", path: alpha }], groups: [{ id: "g1", name: "Work" }] });
+	await settled(data);
+	const before = commitCount(data);
+	await desk.startWiki("Alpha");
+	await desk.stopWiki("Alpha");
+	await desk.page.evaluate(() => window.twDesk.setGroupCollapsed("g1", true));
+	await desk.page.waitForTimeout(2000);
+	expect(commitCount(data)).toBe(before);
+	expect(sh(data, "status", "--porcelain")).toBe("");
+});
+
+test("data folder: quitting before the delay still commits", async ({ desk }) => {
+	const data = await launchWithRepo(desk, {}, "600000");
+	await desk.page.evaluate(() => window.twDesk.saveGroup({ name: "Work" }));
+	await desk.quit();
+	expect(lastSubject(data)).toBe("Added group Work");
+	expect(sh(data, "status", "--porcelain")).toBe("");
+});
+
+test("data folder: no auto-commit while it is behind its remote", async ({ desk }) => {
+	const data = path.join(desk.root, "data");
+	gitRepo(data);
+	fs.writeFileSync(path.join(data, "config.json"), "{}");
+	sh(data, "add", "-A");
+	sh(data, "commit", "--quiet", "-m", "config");
+	const remote = path.join(desk.root, "remote.git");
+	sh(desk.root, "init", "--bare", "--quiet", remote);
+	sh(data, "remote", "add", "origin", remote);
+	sh(data, "push", "--quiet", "-u", "origin", "main");
+	const other = path.join(desk.root, "other");
+	sh(desk.root, "clone", "--quiet", remote, other);
+	fs.writeFileSync(path.join(other, "notes.txt"), "from the laptop");
+	sh(other, "add", "-A");
+	sh(other, "commit", "--quiet", "-m", "laptop");
+	sh(other, "push", "--quiet");
+	sh(data, "fetch", "--quiet");
+	desk.useDataDir(data);
+	await desk.launch({}, { env: { TW_DESK_DATA_COMMIT_DELAY: "500" } });
+	const before = commitCount(data);
+	await expect(desk.page.locator("#data-chip")).toContainText("↓1");
+	await desk.page.evaluate(() => window.twDesk.saveGroup({ name: "Work" }));
+	await desk.page.waitForTimeout(2500);
+	expect(commitCount(data)).toBe(before);
+	expect(sh(data, "status", "--porcelain")).toContain("config.json");
+});
+
+test("data folder: a change made by hand is committed too", async ({ desk }) => {
+	const data = await launchWithRepo(desk);
+	await settled(data);
+	fs.writeFileSync(path.join(data, "notes.txt"), "by hand");
+	await desk.page.evaluate(() => window.twDesk.git.checkNow());
+	await expect.poll(() => lastSubject(data), { timeout: 20000 }).toMatch(/^TW Desk: setup changed \(/);
+	await settled(data);
+});

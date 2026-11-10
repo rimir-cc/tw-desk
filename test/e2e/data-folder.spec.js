@@ -331,3 +331,50 @@ test("data folder: a change made by hand is committed too", async ({ desk }) => 
 	await expect.poll(() => lastSubject(data), { timeout: 20000 }).toMatch(/^TW Desk: setup changed \(/);
 	await settled(data);
 });
+
+// ---------- wikis that aren't found ----------
+
+test("data folder: wikis that aren't found stay listed and can be re-pointed together", async ({ desk }) => {
+	const old = name => path.join(desk.root, "old", name);
+	const moved = path.join(desk.root, "new");
+	fs.mkdirSync(moved);
+	for (const name of ["a", "b"]) {
+		fs.cpSync(desk.wiki("tmp-" + name, "alpha"), path.join(moved, name), { recursive: true });
+	}
+	await desk.launch({
+		wikis: ["a", "b", "c"].map(name => ({ name, path: old(name) })),
+		folderDescriptions: { [old("a")]: "described" }
+	});
+	await expect(desk.row("a").locator(".wiki-meta")).toContainText("not found");
+	const banner = desk.page.locator(".missing-banner");
+	await expect(banner).toContainText("3 wikis were in " + path.join(desk.root, "old"));
+	await desk.pick(moved);
+	await banner.getByRole("button", { name: "Where are they now?…" }).click();
+	await expect(desk.row("a").locator(".wiki-meta")).not.toContainText("not found");
+	const asked = (await desk.takeDialogs()).map(d => d.message).join("\n");
+	expect(asked).toContain("Found: a, b.");
+	expect(asked).toContain("Still not found: c.");
+	expect((await desk.wikiState("a")).path).toBe(path.join(moved, "a"));
+	expect((await desk.wikiState("b")).path).toBe(path.join(moved, "b"));
+	await expect(desk.row("c").locator(".wiki-meta")).toContainText("not found");
+	expect(desk.config().folderDescriptions).toEqual({ [path.join(moved, "a")]: "described" });
+	await expect(banner).toHaveCount(0);
+});
+
+test("data folder: locate a single wiki that isn't found", async ({ desk }) => {
+	const copy = desk.wiki("alpha");
+	const empty = path.join(desk.root, "empty");
+	fs.mkdirSync(empty);
+	await desk.launch({ wikis: [{ name: "Alpha", path: path.join(desk.root, "gone", "alpha") }] });
+	const row = desk.row("Alpha");
+	await expect(row.locator(".wiki-meta")).toContainText("not found");
+	await expect(row.getByRole("button", { name: "Start", exact: true })).toBeDisabled();
+	await desk.pick(empty);
+	await desk.rowMenu(row, "Locate…");
+	await expect.poll(async () => (await desk.takeDialogs()).map(d => d.message).join("\n")).toContain("no tiddlywiki.info");
+	await desk.pick(copy);
+	await desk.rowMenu(row, "Locate…");
+	await expect(row.locator(".wiki-meta")).not.toContainText("not found");
+	expect((await desk.wikiState("Alpha")).path).toBe(copy);
+	await expect(row.getByRole("button", { name: "Start", exact: true })).toBeEnabled();
+});

@@ -435,12 +435,68 @@ async function startupWikis() {
 	scheduleBinaryScans();
 	for (const wiki of config.wikis) {
 		if (wiki.autostart) {
-			startWiki(wiki.id);
+			startWiki(wiki.id).catch(e => appendLog(wiki.id, e.message));
 		}
 	}
 }
 
 ipcMain.handle("data-folder-replace-summary", () => replaceSummary());
+
+// ---------- wikis that aren't found ----------
+
+ipcMain.handle("locate-wiki", async (event, id) => {
+	const wiki = findWiki(id);
+	const picked = await dialog.showOpenDialog(managerWindow, { title: "Where is " + wiki.name + "?", properties: ["openDirectory"] });
+	if (picked.canceled || !picked.filePaths[0]) {
+		return false;
+	}
+	const folder = path.resolve(picked.filePaths[0]);
+	if (!fs.existsSync(path.join(folder, "tiddlywiki.info"))) {
+		throw new Error("Not a wiki folder (no tiddlywiki.info): " + folder);
+	}
+	repointFolderSettings(wiki.path, folder);
+	wiki.path = folder;
+	saveConfig("Re-pointed wiki " + wiki.name);
+	refreshPluginClashes();
+	checkGit({ fetch: false });
+	pushState();
+	return true;
+});
+
+// Descriptions and the Plugins card order follow a folder that moved
+function repointFolderSettings(oldPath, newPath) {
+	const move = p => dataFolder.replacePrefix(p, oldPath, newPath, folderKey) || p;
+	if (config.folderDescriptions) {
+		config.folderDescriptions = Object.fromEntries(Object.entries(config.folderDescriptions).map(([p, text]) => [move(p), text]));
+	}
+	if (Array.isArray(config.pluginsFolderOrder)) {
+		config.pluginsFolderOrder = config.pluginsFolderOrder.map(move);
+	}
+}
+
+function repointPreview(oldParent, newParent) {
+	const missing = config.wikis.filter(w => !fs.existsSync(w.path));
+	return dataFolder.repointPlan(missing.map(w => ({ id: w.id, path: w.path })), oldParent, newParent, p => fs.existsSync(path.join(p, "tiddlywiki.info")), folderKey)
+		.map(entry => Object.assign(entry, { name: findWiki(entry.id).name }));
+}
+
+ipcMain.handle("repoint-preview", (event, oldParent, newParent) => repointPreview(path.resolve(oldParent), path.resolve(newParent)));
+
+ipcMain.handle("repoint-apply", (event, oldParent, newParent) => {
+	const found = repointPreview(path.resolve(oldParent), path.resolve(newParent)).filter(entry => entry.found);
+	if (!found.length) {
+		return 0;
+	}
+	for (const entry of found) {
+		findWiki(entry.id).path = entry.to;
+	}
+	repointFolderSettings(path.resolve(oldParent), path.resolve(newParent));
+	saveConfig("Re-pointed " + found.length + (found.length === 1 ? " wiki" : " wikis") + " from " + path.resolve(oldParent) + " to " + path.resolve(newParent));
+	refreshPluginClashes();
+	checkGit({ fetch: false });
+	pushState();
+	return found.length;
+});
 
 ipcMain.handle("data-folder-setup", async (event, mode, target) => {
 	if (!dataSetupNeeded) {
@@ -585,7 +641,8 @@ function snapshot() {
 		webCollapsed: !!config.webCollapsed,
 		// Folders loaded only through includes (also deeper ones), for the Includes overview
 		includedFolders: knownFolders().filter(f => !f.managed).map(f => ({ path: f.path, usedBy: f.usedBy, description: folderDescription(f.path) })),
-		wikis: config.wikis.map(w => Object.assign({}, w, { group: groupOf(w), linkKey: links.linkKeyOf(w) }, serverState(w.id), { port: activePort(w.id), url: wikiUrl(w.id) }, withDescriptions(readIncludes(w.path)), { binaries: binarySettingsOf(w), binaryScan: binaryScans.get(w.id) || null, pluginClashes: pluginClashes.get(w.id) || [] }))
+		missingGroups: dataFolder.missingGroups(config.wikis.filter(w => !fs.existsSync(w.path)).map(w => ({ id: w.id, path: w.path })), folderKey),
+		wikis: config.wikis.map(w => Object.assign({ missing: !fs.existsSync(w.path) }, w, { group: groupOf(w), linkKey: links.linkKeyOf(w) }, serverState(w.id), { port: activePort(w.id), url: wikiUrl(w.id) }, withDescriptions(readIncludes(w.path)), { binaries: binarySettingsOf(w), binaryScan: binaryScans.get(w.id) || null, pluginClashes: pluginClashes.get(w.id) || [] }))
 	};
 }
 
@@ -745,6 +802,9 @@ async function findPort(wiki) {
 
 async function startWiki(id) {
 	const wiki = findWiki(id);
+	if (!fs.existsSync(wiki.path)) {
+		throw new Error("The folder of " + wiki.name + " wasn't found: " + wiki.path + ". Use ⋯ → Locate… to point TW Desk at it.");
+	}
 	const existing = servers.get(id);
 	if (existing && (existing.status === "running" || existing.status === "starting")) {
 		return;

@@ -12,6 +12,9 @@ contextBridge.exposeInMainWorld("twDesk", {
 		checkNow: () => ipcRenderer.invoke("git-check-now")
 	},
 	pickFolder: title => ipcRenderer.invoke("pick-folder", title),
+	locateWiki: id => ipcRenderer.invoke("locate-wiki", id),
+	repointPreview: (oldParent, newParent) => ipcRenderer.invoke("repoint-preview", oldParent, newParent),
+	repointApply: (oldParent, newParent) => ipcRenderer.invoke("repoint-apply", oldParent, newParent),
 	dataFolder: {
 		setup: (mode, target) => ipcRenderer.invoke("data-folder-setup", mode, target),
 		replaceSummary: () => ipcRenderer.invoke("data-folder-replace-summary"),

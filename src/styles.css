@@ -277,3 +277,9 @@ textarea, input:not([type=checkbox]):not([type=radio]) {
 .badge.duplicate { color: var(--muted); border-style: dashed; }
 .overview-description { display: flex; gap: 6px; align-items: flex-start; margin: 4px 0; font-size: 12px; }
 .overview-description textarea { flex: 1; font: inherit; }
+
+/* ---------- data folder ---------- */
+.wiki-meta.missing { color: var(--error); }
+.missing-banner { margin: 0 0 8px; padding: 8px 12px; border: 1px solid var(--starting); border-radius: 6px; background: var(--panel); }
+.data-folder-row { align-items: center; gap: 8px; flex-wrap: wrap; }
+#data-folder-path { word-break: break-all; }

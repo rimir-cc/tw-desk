@@ -58,6 +58,7 @@ function render() {
 	$("#empty-hint").hidden = state.wikis.length > 0 || state.groups.length > 0;
 	$("#config-error").hidden = !state.configError;
 	$("#config-error").textContent = state.configError || "";
+	renderMissingBanners();
 	for (const group of state.groups) {
 		const wikis = state.wikis.filter(w => w.group === group.id);
 		list.append(groupHeader(group, wikis));
@@ -200,7 +201,10 @@ function wikiItem(wiki, index, count) {
 	}
 	const meta = document.createElement("div");
 	meta.className = "wiki-meta";
-	meta.textContent = STATUS_TEXT[wiki.status] + " · " + portText(wiki) + (wiki.autostart ? " · autostart" : "") + " · " + wiki.path;
+	meta.textContent = wiki.missing
+		? "not found · " + wiki.path
+		: STATUS_TEXT[wiki.status] + " · " + portText(wiki) + (wiki.autostart ? " · autostart" : "") + " · " + wiki.path;
+	meta.classList.toggle("missing", !!wiki.missing);
 	meta.title = wiki.path + (!wiki.fixedPort && wiki.lastPort ? "\nAutomatic port; last used: " + wiki.lastPort : "");
 	info.append(name);
 	const about = aboutText(wiki);
@@ -218,7 +222,7 @@ function wikiItem(wiki, index, count) {
 		err.textContent = wiki.error;
 		info.append(err);
 	}
-	if (wiki.infoError) {
+	if (wiki.infoError && !wiki.missing) {
 		const err = document.createElement("div");
 		err.className = "wiki-error";
 		err.textContent = wiki.infoError;
@@ -245,8 +249,8 @@ function wikiItem(wiki, index, count) {
 	actions.append(
 		running || busy
 			? button("Stop", () => api.stopWiki(wiki.id), { disabled: busy })
-			: button("Start", () => api.startWiki(wiki.id)),
-		button("Open", () => api.openWiki(wiki.id, false), { className: "primary", title: "Open in a TW Desk window (starts the server if needed)" }),
+			: button("Start", () => api.startWiki(wiki.id), { disabled: !!wiki.missing, title: wiki.missing ? "The folder wasn't found – ⋯ → Locate…" : "" }),
+		button("Open", () => api.openWiki(wiki.id, false), { className: "primary", disabled: !!wiki.missing, title: wiki.missing ? "The folder wasn't found – ⋯ → Locate…" : "Open in a TW Desk window (starts the server if needed)" }),
 		more
 	);
 
@@ -366,6 +370,17 @@ function wikiMenu(wiki, index, count) {
 	const busy = wiki.status === "running" || wiki.status === "starting";
 	const act = action => () => run(action);
 	const gitAvailable = !!(state.git && state.git.available);
+	if (wiki.missing) {
+		return [
+			{ label: "Locate…", action: act(() => api.locateWiki(wiki.id)), title: "Point TW Desk at the folder of " + wiki.name },
+			{ label: "Edit…", action: act(() => openDialog(wiki)) },
+			"-",
+			{ label: "Move up", action: act(() => api.moveWiki(wiki.id, -1)), disabled: index === 0 },
+			{ label: "Move down", action: act(() => api.moveWiki(wiki.id, 1)), disabled: index === count - 1 },
+			"-",
+			{ label: "Remove…", action: act(() => openRemoveDialog(wiki)), title: "Remove from the list" }
+		];
+	}
 	return [
 		{ label: "Open in browser", action: act(() => api.openWiki(wiki.id, true)), title: wiki.url ? "Open " + wiki.url + " in the default browser" : "Starts the server if needed" },
 		{ label: "Show in " + (FILE_MANAGER[state.platform] || "file manager"), action: act(() => api.showFolder(wiki.id)), title: wiki.path },
@@ -1567,6 +1582,38 @@ function adaptPlaceholders(platform) {
 	}
 	for (const input of document.querySelectorAll("input[placeholder]")) {
 		input.placeholder = input.placeholder.replace(/C:\\…\\/g, "~/").replace(/\\/g, "/");
+	}
+}
+
+// ---------- wikis that aren't found ----------
+
+function renderMissingBanners() {
+	const box = $("#missing-banners");
+	box.replaceChildren();
+	for (const group of state.missingGroups || []) {
+		const banner = document.createElement("div");
+		banner.className = "missing-banner";
+		banner.append(group.ids.length + " wikis were in " + group.parent + " – they're not there. ");
+		banner.append(button("Where are they now?…", () => run(() => repointGroup(group)), { title: "Choose the folder that holds them now" }));
+		box.append(banner);
+	}
+}
+
+async function repointGroup(group) {
+	const target = await api.pickFolder("Where are the wikis from " + group.parent + " now?");
+	if (!target) {
+		return;
+	}
+	const plan = await api.repointPreview(group.parent, target);
+	const found = plan.filter(p => p.found).map(p => p.name);
+	const missing = plan.filter(p => !p.found).map(p => p.name);
+	if (!found.length) {
+		alert("None of them is in " + target + (missing.length ? " (looked for " + missing.join(", ") + ")." : "."));
+		return;
+	}
+	const text = "Found: " + found.join(", ") + "." + (missing.length ? "\nStill not found: " + missing.join(", ") + "." : "") + "\n\nPoint TW Desk at the ones found in " + target + "?";
+	if (confirm(text)) {
+		await api.repointApply(group.parent, target);
 	}
 }
 

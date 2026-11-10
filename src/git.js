@@ -137,6 +137,16 @@ async function status(root) {
 	} catch (e) {
 		// no commits yet
 	}
+	// When the oldest commit that isn't pushed yet was made (for the reminder to push)
+	result.unpushedSince = null;
+	if (result.upstream && result.ahead) {
+		try {
+			const times = (await git(root, ["log", "--format=%ct", "@{u}..HEAD"])).trim().split(/\r?\n/).filter(Boolean).map(Number);
+			result.unpushedSince = times.length ? Math.min(...times) * 1000 : null;
+		} catch (e) {
+			// keep null
+		}
+	}
 	result.changedCount = tiddlerCount(result.changed);
 	result.suggestedMessage = defaultMessage(result.changed);
 	return result;
@@ -189,14 +199,15 @@ async function pull(root) {
 	}
 }
 
-async function init(folder) {
+// options: { ignore: text of a new .gitignore (default: the one for wikis), message: of the first commit }
+async function init(folder, options = {}) {
 	await git(folder, ["init", "--quiet"]);
 	const ignoreFile = path.join(folder, ".gitignore");
 	if (!fs.existsSync(ignoreFile)) {
-		fs.writeFileSync(ignoreFile, GITIGNORE);
+		fs.writeFileSync(ignoreFile, options.ignore === undefined ? GITIGNORE : options.ignore);
 	}
 	await git(folder, ["add", "-A"]);
-	await git(folder, ["commit", "--quiet", "-m", "TW Desk: initial commit"]);
+	await git(folder, ["commit", "--quiet", "-m", options.message || "TW Desk: initial commit"]);
 }
 
 // Names (relative to <folder>/files, as git prints them) of files that are tracked and unchanged against HEAD

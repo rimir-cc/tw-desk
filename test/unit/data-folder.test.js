@@ -83,3 +83,71 @@ test("missingGroups, repointPlan and replacePrefix", () => {
 	assert.equal(dataFolder.replacePrefix(P("other"), P("old", "w"), P("new"), key), null);
 	assert.equal(dataFolder.replacePrefix(P("old", "wx"), P("old", "w"), P("new"), key), null);
 });
+
+// ---------- file operations ----------
+
+const fs = require("fs");
+const os = require("os");
+const tmp = () => fs.mkdtempSync(path.join(os.tmpdir(), "tw-desk-data-"));
+const write = (file, text) => {
+	fs.mkdirSync(path.dirname(file), { recursive: true });
+	fs.writeFileSync(file, text);
+};
+
+test("pointer round-trip; missing or broken file gives null", () => {
+	const userData = tmp();
+	assert.equal(dataFolder.readPointer(userData), null);
+	dataFolder.writePointer(userData, P("d", "tw-desk-data"));
+	assert.equal(dataFolder.readPointer(userData), P("d", "tw-desk-data"));
+	fs.writeFileSync(path.join(userData, "data-folder.json"), "{ broken");
+	assert.equal(dataFolder.readPointer(userData), null);
+	fs.rmSync(userData, { recursive: true, force: true });
+});
+
+test("folderState: missing, empty, data, other", () => {
+	const root = tmp();
+	assert.equal(dataFolder.folderState(path.join(root, "nope")), "missing");
+	fs.mkdirSync(path.join(root, "empty"));
+	assert.equal(dataFolder.folderState(path.join(root, "empty")), "empty");
+	write(path.join(root, "data", "config.json"), "{}");
+	assert.equal(dataFolder.folderState(path.join(root, "data")), "data");
+	write(path.join(root, "other", "x.txt"), "x");
+	assert.equal(dataFolder.folderState(path.join(root, "other")), "other");
+	fs.rmSync(root, { recursive: true, force: true });
+});
+
+test("copyData copies only the listed entries and verifies them", () => {
+	const root = tmp();
+	const from = path.join(root, "userdata");
+	write(path.join(from, "config.json"), "{}");
+	write(path.join(from, "store", "plugins", "a", "b", "plugin.info"), "{}");
+	write(path.join(from, "web", "x", "snapshot.html"), "<html>");
+	write(path.join(from, "backup", "y"), "old");
+	const to = path.join(root, "data");
+	dataFolder.copyData(from, to);
+	assert.ok(fs.existsSync(path.join(to, "config.json")));
+	assert.ok(fs.existsSync(path.join(to, "store", "plugins", "a", "b", "plugin.info")));
+	assert.ok(fs.existsSync(path.join(to, "web", "x", "snapshot.html")));
+	assert.equal(fs.existsSync(path.join(to, "backup")), false);
+	assert.ok(fs.existsSync(path.join(from, "store")), "source kept");
+	fs.rmSync(root, { recursive: true, force: true });
+});
+
+test("verifyCopy throws on a size mismatch; copyTree includes .git", () => {
+	const root = tmp();
+	const from = path.join(root, "a");
+	write(path.join(from, "config.json"), "{}");
+	write(path.join(from, ".git", "HEAD"), "ref: refs/heads/main\n");
+	const to = path.join(root, "b");
+	dataFolder.copyTree(from, to);
+	assert.ok(fs.existsSync(path.join(to, ".git", "HEAD")));
+	assert.ok(dataFolder.ownRepo(to));
+	assert.equal(dataFolder.ownRepo(path.join(root, "nope")), false);
+	fs.writeFileSync(path.join(to, "config.json"), "{ changed }");
+	assert.throws(() => dataFolder.verifyCopy(from, to, ["config.json"]), /copy/i);
+	fs.rmSync(root, { recursive: true, force: true });
+});
+
+test("DATA_GITIGNORE", () => {
+	assert.equal(dataFolder.DATA_GITIGNORE, "*.tmp\n");
+});

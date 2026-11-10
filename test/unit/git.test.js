@@ -238,3 +238,45 @@ test("committedFiles: wiki folder inside a larger repository", { skip }, async (
 	writeFiles(wiki, { "files/b.png": "changed" });
 	assert.deepEqual([...await git.committedFiles(wiki)], ["a.png"]);
 });
+
+test("init with ignore and message (data folder)", { skip }, async () => {
+	const data = path.join(dir, "data-init");
+	fs.mkdirSync(data);
+	fs.writeFileSync(path.join(data, "config.json"), "{}");
+	await git.init(data, { ignore: "*.tmp\n", message: "Initial TW Desk data" });
+	assert.equal(fs.readFileSync(path.join(data, ".gitignore"), "utf8"), "*.tmp\n");
+	assert.equal(sh(data, "log", "-1", "--format=%s"), "Initial TW Desk data");
+});
+
+test("init nested inside another repository makes its own repository", { skip }, async () => {
+	const outer = folder("outer");
+	await git.init(outer);
+	const inner = path.join(outer, "data");
+	fs.mkdirSync(inner);
+	fs.writeFileSync(path.join(inner, "config.json"), "{}");
+	await git.init(inner, { ignore: "*.tmp\n", message: "Initial TW Desk data" });
+	assert.equal(fs.realpathSync(sh(inner, "rev-parse", "--show-toplevel")), fs.realpathSync(inner));
+	assert.equal(sh(outer, "log", "--format=%s"), "TW Desk: initial commit");
+});
+
+test("status.unpushedSince: the oldest commit not pushed yet", { skip }, async () => {
+	const remote = path.join(dir, "unpushed-remote.git");
+	sh(dir, "init", "--bare", "--quiet", remote);
+	const repo = folder("unpushed");
+	await git.init(repo);
+	sh(repo, "remote", "add", "origin", remote);
+	sh(repo, "push", "--quiet", "-u", "origin", "main");
+	assert.equal((await git.status(repo)).unpushedSince, null);
+	fs.writeFileSync(path.join(repo, "tiddlers", "A.tid"), "title: A\n\na");
+	sh(repo, "add", "-A");
+	sh(repo, "commit", "--quiet", "-m", "one", "--date", "2026-01-01T10:00:00");
+	const first = Number(sh(repo, "log", "-1", "--format=%ct")) * 1000;
+	fs.writeFileSync(path.join(repo, "tiddlers", "B.tid"), "title: B\n\nb");
+	sh(repo, "add", "-A");
+	sh(repo, "commit", "--quiet", "-m", "two");
+	const status = await git.status(repo);
+	assert.equal(status.ahead, 2);
+	assert.equal(status.unpushedSince, first);
+	sh(repo, "push", "--quiet");
+	assert.equal((await git.status(repo)).unpushedSince, null);
+});

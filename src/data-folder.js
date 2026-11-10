@@ -5,6 +5,7 @@
 // <userData>/data-folder.json. This module holds the path rules, the local/shared split, file operations and texts;
 // main.js wires them up (no Electron here).
 
+const fs = require("fs");
 const path = require("path");
 const { commonBase } = require("./setup");
 
@@ -173,7 +174,111 @@ function repointPlan(items, oldParent, newParent, exists, key) {
 	}).filter(entry => entry.to);
 }
 
+// ---------- files ----------
+
+const POINTER = "data-folder.json";
+const DATA_GITIGNORE = "*.tmp\n";
+const DATA_ENTRIES = ["config.json", "store", "web"];
+
+function readPointer(userData) {
+	try {
+		const pointer = JSON.parse(fs.readFileSync(path.join(userData, POINTER), "utf8"));
+		return typeof pointer.path === "string" && pointer.path ? path.resolve(pointer.path) : null;
+	} catch (e) {
+		return null;
+	}
+}
+
+function writePointer(userData, dataDir) {
+	fs.mkdirSync(userData, { recursive: true });
+	const file = path.join(userData, POINTER);
+	fs.writeFileSync(file + ".tmp", JSON.stringify({ path: path.resolve(dataDir) }, null, 2));
+	fs.renameSync(file + ".tmp", file);
+}
+
+// "missing" | "empty" | "data" (has a config.json) | "other"
+function folderState(dir) {
+	let entries;
+	try {
+		entries = fs.readdirSync(dir);
+	} catch (e) {
+		return "missing";
+	}
+	if (!entries.length) {
+		return "empty";
+	}
+	return entries.includes("config.json") ? "data" : "other";
+}
+
+function ownRepo(dir) {
+	return fs.existsSync(path.join(dir, ".git"));
+}
+
+// Relative path -> size of every file below dir/entry (entries that don't exist are skipped)
+function fileSizes(dir, entries) {
+	const sizes = new Map();
+	const walk = relative => {
+		const full = path.join(dir, relative);
+		const stat = fs.statSync(full);
+		if (stat.isDirectory()) {
+			for (const name of fs.readdirSync(full)) {
+				walk(path.join(relative, name));
+			}
+		} else {
+			sizes.set(relative, stat.size);
+		}
+	};
+	for (const entry of entries) {
+		if (fs.existsSync(path.join(dir, entry))) {
+			walk(entry);
+		}
+	}
+	return sizes;
+}
+
+function verifyCopy(fromDir, toDir, entries) {
+	const from = fileSizes(fromDir, entries);
+	const to = fileSizes(toDir, entries);
+	for (const [file, size] of from) {
+		if (to.get(file) !== size) {
+			throw new Error("The copy of " + path.join(fromDir, file) + " in " + toDir + " is incomplete.");
+		}
+	}
+}
+
+// Copies the entries, verifies them and, if anything went wrong, removes what it copied
+function copyEntries(fromDir, toDir, entries) {
+	fs.mkdirSync(toDir, { recursive: true });
+	const copied = [];
+	try {
+		for (const entry of entries) {
+			const source = path.join(fromDir, entry);
+			if (fs.existsSync(source)) {
+				copied.push(entry);
+				fs.cpSync(source, path.join(toDir, entry), { recursive: true, errorOnExist: true, force: false });
+			}
+		}
+		verifyCopy(fromDir, toDir, entries);
+	} catch (e) {
+		for (const entry of copied) {
+			fs.rmSync(path.join(toDir, entry), { recursive: true, force: true });
+		}
+		throw e;
+	}
+}
+
+function copyData(fromDir, toDir, entries = DATA_ENTRIES) {
+	copyEntries(fromDir, toDir, entries);
+}
+
+// The whole folder, including .git
+function copyTree(fromDir, toDir) {
+	copyEntries(fromDir, toDir, fs.readdirSync(fromDir));
+}
+
 module.exports = {
+	POINTER, DATA_GITIGNORE, DATA_ENTRIES,
+	readPointer, writePointer, folderState, ownRepo, verifyCopy, copyData, copyTree,
 	toStored, fromStored, storeConfigPaths, resolveConfigPaths,
 	splitLocal, mergeLocal,
 	commitMessage, suggestLocation,

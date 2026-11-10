@@ -12,6 +12,7 @@ const path = require("path");
 const { GIT_ENV, sh } = require("../helpers/git-env");
 const tw = require("../helpers/tw");
 const { startServer } = require("../helpers/server");
+const dataFolder = require("../../src/data-folder");
 
 const ROOT = path.resolve(__dirname, "..", "..");
 // Away from the user's TW Desk (8090/8091) and the 8080 of other tools
@@ -23,7 +24,10 @@ function escapeRegExp(text) {
 
 // Runs inside TW Desk's main process (serialized by Playwright, so no closures)
 function stubMainProcess({ dialog, shell, clipboard }) {
-	const calls = globalThis.twDeskTest = { picks: [], saves: [], answers: [], questions: [], opened: [], shown: [], trashed: [], copied: [] };
+	const calls = globalThis.twDeskTest = { picks: [], saves: [], answers: [], questions: [], opened: [], shown: [], trashed: [], copied: [], errors: [] };
+	dialog.showErrorBox = (title, message) => {
+		calls.errors.push(title + ": " + message);
+	};
 	// Not the user's clipboard
 	clipboard.writeText = text => {
 		calls.copied.push(text);
@@ -79,8 +83,11 @@ class Desk {
 		return target;
 	}
 
-	// Starts TW Desk. config: parts of config.json; wikis may leave out their id
-	async launch(config = {}) {
+	// Starts TW Desk. config: parts of config.json; wikis may leave out their id.
+	// options: dataEnv (default true: the data folder is TW_DESK_DATA = this.dataDir, by default the user-data folder),
+	// writeConfig (default true), env (more environment variables)
+	async launch(config = {}, options = {}) {
+		this.launchOptions = options;
 		const full = Object.assign({
 			basePort: BASE_PORT,
 			groups: [],
@@ -95,10 +102,18 @@ class Desk {
 		}, config);
 		full.wikis = full.wikis.map(w => Object.assign({ id: crypto.randomUUID(), autostart: false }, w));
 		fs.mkdirSync(this.userData, { recursive: true });
-		fs.writeFileSync(path.join(this.userData, "config.json"), JSON.stringify(full, null, 2));
+		const dataEnv = options.dataEnv !== false;
+		if (options.writeConfig !== false) {
+			const target = dataEnv ? this.dataDir : this.userData;
+			fs.mkdirSync(target, { recursive: true });
+			fs.writeFileSync(path.join(target, "config.json"), JSON.stringify(full, null, 2));
+		}
 
 		// GIT_ENV: the app's git uses an empty global config and a test identity, not the user's settings
-		const env = Object.assign({}, process.env, GIT_ENV, { TW_DESK_USER_DATA: this.userData, ELECTRON_DISABLE_SECURITY_WARNINGS: "true" });
+		const env = Object.assign({}, process.env, GIT_ENV, { TW_DESK_USER_DATA: this.userData, ELECTRON_DISABLE_SECURITY_WARNINGS: "true" }, dataEnv ? { TW_DESK_DATA: this.dataDir } : {}, options.env || {});
+		if (!dataEnv) {
+			delete env.TW_DESK_DATA;
+		}
 		delete env.ELECTRON_RUN_AS_NODE;
 		this.app = await _electron.launch({ args: [ROOT], cwd: ROOT, env });
 		const child = this.app.process();
@@ -130,11 +145,34 @@ class Desk {
 		return this.page.evaluate(() => window.twDesk.getState());
 	}
 
+	// The data folder TW Desk uses (the user-data folder unless set with useDataDir())
+	get dataDir() {
+		return this.customDataDir || this.userData;
+	}
+
+	useDataDir(dir) {
+		this.customDataDir = dir;
+	}
+
+	// config.json and local.json as TW Desk sees them (absolute paths, local values merged in)
 	config() {
+		const pointer = dataFolder.readPointer(this.userData);
+		const dir = this.launchOptions && this.launchOptions.dataEnv === false ? pointer || this.userData : this.dataDir;
+		let local = {};
+		try {
+			local = JSON.parse(fs.readFileSync(path.join(this.userData, "local.json"), "utf8"));
+		} catch (e) {
+			// none yet
+		}
+		return dataFolder.mergeLocal(dataFolder.resolveConfigPaths(this.rawConfig(dir), dir), local);
+	}
+
+	// The config.json file as written
+	rawConfig(dir = this.dataDir) {
 		// TW Desk may be replacing the file right now (on Windows the rename can fall back to rewriting it)
 		for (let attempt = 1; ; attempt++) {
 			try {
-				return JSON.parse(fs.readFileSync(path.join(this.userData, "config.json"), "utf8"));
+				return JSON.parse(fs.readFileSync(path.join(dir, "config.json"), "utf8"));
 			} catch (e) {
 				if (attempt === 5) {
 					throw e;
@@ -174,6 +212,7 @@ class Desk {
 		await this.app.context().tracing.stop();
 		await this.app.close();
 		this.userData = path.join(this.root, "userdata-" + crypto.randomUUID().slice(0, 8));
+		this.customDataDir = null;
 		return this.launch(config);
 	}
 
@@ -191,6 +230,13 @@ class Desk {
 
 	groupHeader(name) {
 		return this.page.locator("li.group-header:not(.web-header)").filter({ has: this.page.locator(".group-toggle", { hasText: new RegExp("^[▾▸] " + escapeRegExp(name) + "$") }) });
+	}
+
+	async addGroup(name) {
+		await this.newMenu("Group…");
+		await this.page.locator("#group-form [name=name]").fill(name);
+		await this.page.locator("#group-form button[type=submit]").click();
+		await expect(this.groupHeader(name)).toBeVisible();
 	}
 
 	async startWiki(name) {

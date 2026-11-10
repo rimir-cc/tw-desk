@@ -56,6 +56,8 @@ function render() {
 	const list = $("#wiki-list");
 	list.replaceChildren();
 	$("#empty-hint").hidden = state.wikis.length > 0 || state.groups.length > 0;
+	$("#config-error").hidden = !state.configError;
+	$("#config-error").textContent = state.configError || "";
 	for (const group of state.groups) {
 		const wikis = state.wikis.filter(w => w.group === group.id);
 		list.append(groupHeader(group, wikis));

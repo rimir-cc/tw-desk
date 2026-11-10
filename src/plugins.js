@@ -28,9 +28,10 @@ let storeRoot = null;
 let backupRoot = null;
 const indexCache = new Map(); // library url -> { entries, fetched }
 
-function init(userDataDir) {
-	storeRoot = path.join(userDataDir, "store");
-	backupRoot = path.join(userDataDir, "backup");
+// The store lives in the data folder, backups stay in the user-data folder
+function init(storeParent, backupParent = storeParent) {
+	storeRoot = path.join(storeParent, "store");
+	backupRoot = path.join(backupParent, "backup");
 	for (const kind of Object.values(KINDS)) {
 		fs.mkdirSync(path.join(storeRoot, kind.dir), { recursive: true });
 	}

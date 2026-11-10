@@ -12,6 +12,7 @@ const setup = require("./setup");
 const links = require("./links");
 const binaries = require("./binaries");
 const pluginChain = require("./plugin-chain");
+const dataFolder = require("./data-folder");
 const http = require("http");
 
 const DEFAULT_BASE_PORT = 8090;
@@ -34,18 +35,75 @@ let quitting = false;
 
 // ---------- config ----------
 
+// ---------- data folder (src/data-folder.js) ----------
+
+// The user's setup (config.json, store/, web/) lives in the data folder; machine-local values in
+// <userData>/local.json. dataDir is null while the data folder hasn't been chosen yet (files then stay in userData).
+let dataDir = null;
+let dataSetupNeeded = null; // null | "migrate" | "new" | "lost"
+let lostDataDir = null;
+let configError = null; // config.json couldn't be read: it is not written until it can be read again
+let lastSharedText = null;
+let lastLocalText = null;
+
+function userDataDir() {
+	return app.getPath("userData");
+}
+
+// Where the setup lives right now
+function setupDir() {
+	return dataDir || userDataDir();
+}
+
+// TW_DESK_DATA (tests, a second setup) → the pointer → the data folder has to be chosen
+function resolveDataDir() {
+	if (process.env.TW_DESK_DATA) {
+		dataDir = path.resolve(process.env.TW_DESK_DATA);
+		fs.mkdirSync(dataDir, { recursive: true });
+		return;
+	}
+	const pointer = dataFolder.readPointer(userDataDir());
+	if (pointer && fs.existsSync(pointer)) {
+		dataDir = pointer;
+	} else if (pointer) {
+		dataSetupNeeded = "lost";
+		lostDataDir = pointer;
+	} else {
+		dataSetupNeeded = fs.existsSync(path.join(userDataDir(), "config.json")) ? "migrate" : "new";
+	}
+}
+
 function configPath() {
-	return path.join(app.getPath("userData"), "config.json");
+	return path.join(setupDir(), "config.json");
+}
+
+function localPath() {
+	return path.join(userDataDir(), "local.json");
 }
 
 function loadConfig() {
+	configError = null;
+	let shared = {};
+	lastSharedText = null;
 	try {
-		config = Object.assign({ basePort: DEFAULT_BASE_PORT, groups: [], wikis: [], webWikis: [] }, JSON.parse(fs.readFileSync(configPath(), "utf8")));
+		lastSharedText = fs.readFileSync(configPath(), "utf8");
+		shared = dataFolder.resolveConfigPaths(JSON.parse(lastSharedText), setupDir());
 	} catch (e) {
-		if (e.code !== "ENOENT") {
-			dialog.showErrorBox("TW Desk", "Could not read " + configPath() + ":\n" + e.message);
+		shared = {};
+		if (e.code === "ENOENT") {
+			lastSharedText = null;
+		} else {
+			configError = "Could not read " + configPath() + ": " + e.message + " – TW Desk doesn't change the file until it can be read again.";
 		}
 	}
+	let local = {};
+	try {
+		lastLocalText = fs.readFileSync(localPath(), "utf8");
+		local = JSON.parse(lastLocalText);
+	} catch (e) {
+		lastLocalText = null;
+	}
+	config = Object.assign({ basePort: DEFAULT_BASE_PORT, groups: [], wikis: [], webWikis: [] }, dataFolder.mergeLocal(shared, local));
 	if (!Array.isArray(config.groups)) {
 		config.groups = [];
 	}
@@ -75,22 +133,52 @@ function loadConfig() {
 			{ url: "https://tw-cpl.netlify.app/repo", type: "cpl" }
 		];
 	}
+	// What was read counts as written: a file that only differs in form (absolute paths, defaults, local values
+	// still in it) is rewritten with the next real change, not just because TW Desk started
+	if (!configError && lastSharedText !== null) {
+		lastSharedText = sharedText();
+	}
 }
 
-// Written to a temporary file first, so a reader (or a crash) never sees a half-written config
-function saveConfig() {
-	fs.mkdirSync(path.dirname(configPath()), { recursive: true });
-	const text = JSON.stringify(config, null, 2);
-	const temp = configPath() + ".tmp";
+function sharedText() {
+	return JSON.stringify(dataFolder.storeConfigPaths(dataFolder.splitLocal(config).shared, setupDir()), null, 2);
+}
+
+// Written to a temporary file first, so a reader (or a crash) never sees a half-written file
+function writeFileSafely(file, text) {
+	fs.mkdirSync(path.dirname(file), { recursive: true });
+	const temp = file + ".tmp";
 	try {
 		fs.writeFileSync(temp, text);
-		fs.renameSync(temp, configPath());
+		fs.renameSync(temp, file);
 	} catch (e) {
 		// e.g. Windows refuses the rename while another program has the file open
 		fs.rmSync(temp, { force: true });
-		fs.writeFileSync(configPath(), text);
+		fs.writeFileSync(file, text);
 	}
 }
+
+// config.json (in the data folder) is only written when the setup itself changed; action describes the change for
+// the data folder's next commit
+function saveConfig(action) {
+	const localText = JSON.stringify(dataFolder.splitLocal(config).local, null, 2);
+	if (localText !== lastLocalText) {
+		writeFileSafely(localPath(), localText);
+		lastLocalText = localText;
+	}
+	if (configError) {
+		return;
+	}
+	const text = sharedText();
+	if (text !== lastSharedText) {
+		writeFileSafely(configPath(), text);
+		lastSharedText = text;
+		dataChanged(action);
+	}
+}
+
+// Filled in with the data folder's auto-commit
+function dataChanged() {}
 
 function findWiki(id) {
 	const wiki = config.wikis.find(w => w.id === id);
@@ -207,6 +295,8 @@ function snapshot() {
 		appVersion: app.getVersion(),
 		twVersion: TW_VERSION,
 		configPath: configPath(),
+		configError,
+		dataFolder: { path: dataDir, setup: dataSetupNeeded, lost: lostDataDir },
 		installDir: app.isPackaged ? path.dirname(process.execPath) : app.getAppPath(),
 		platform: process.platform,
 		caseInsensitivePaths: CASE_INSENSITIVE_PATHS,
@@ -2042,7 +2132,7 @@ let webQueue = Promise.resolve();
 let webTimer = null;
 
 function webDir(id) {
-	return path.join(app.getPath("userData"), "web", id);
+	return path.join(setupDir(), "web", id);
 }
 
 function snapshotFile(id) {
@@ -2995,7 +3085,8 @@ if (!app.requestSingleInstanceLock()) {
 	});
 
 	app.whenReady().then(async () => {
-		plugins.init(app.getPath("userData"));
+		resolveDataDir();
+		plugins.init(setupDir(), userDataDir());
 		loadConfig();
 		createManagerWindow();
 		refreshPluginClashes();

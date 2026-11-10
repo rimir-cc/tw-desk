@@ -163,3 +163,86 @@ test("data folder: autostart waits until it is chosen", async ({ desk }) => {
 	await desk.page.locator("#data-setup-create").click();
 	await expect(desk.row("Alpha").locator(".wiki-meta")).toContainText("running", { timeout: 60000 });
 });
+
+// ---------- Settings → Data folder, header chip, Git tab ----------
+
+function gitRepo(dir) {
+	fs.mkdirSync(dir, { recursive: true });
+	fs.writeFileSync(path.join(dir, "README.txt"), "data");
+	sh(dir, "init", "--quiet");
+	sh(dir, "add", "-A");
+	sh(dir, "commit", "--quiet", "-m", "init");
+}
+
+async function openSettings(desk) {
+	await desk.page.locator("#show-settings").click();
+	await expect(desk.page.locator("#settings-dialog")).toBeVisible();
+}
+
+test("data folder: move it in Settings", async ({ desk }) => {
+	const alpha = desk.wiki("alpha");
+	const old = path.join(desk.root, "p", "q", "data");
+	gitRepo(old);
+	desk.useDataDir(old);
+	await desk.launch({ wikis: [{ name: "Alpha", path: alpha }] });
+	await openSettings(desk);
+	await expect(desk.page.locator("#data-folder-path")).toHaveText(old);
+	const target = path.join(desk.root, "data2");
+	await desk.pick(target);
+	await desk.page.locator("#data-move").click();
+	await expect(desk.page.locator("#data-folder-path")).toHaveText(target);
+	expect(desk.rawConfig(target).wikis[0].path).toBe("../wikis/alpha");
+	expect(fs.existsSync(path.join(target, ".git"))).toBe(true);
+	expect(JSON.parse(fs.readFileSync(path.join(desk.userData, "data-folder.json"), "utf8")).path).toBe(target);
+	const asked = (await desk.takeDialogs()).map(d => d.message).join("\n");
+	expect(asked).toContain("Remove the old data folder " + old);
+	await expect.poll(() => fs.existsSync(old)).toBe(false);
+	expect((await desk.state()).wikis.map(w => w.name)).toEqual(["Alpha"]);
+});
+
+test("data folder: moving refuses a folder with files in it", async ({ desk }) => {
+	const foreign = path.join(desk.root, "foreign");
+	fs.mkdirSync(foreign);
+	fs.writeFileSync(path.join(foreign, "x.txt"), "x");
+	await desk.launch({});
+	await openSettings(desk);
+	await desk.pick(foreign);
+	await desk.page.locator("#data-move").click();
+	await expect(desk.page.locator("#settings-error")).toContainText("isn't empty");
+	await expect(desk.page.locator("#data-folder-path")).toHaveText(desk.userData);
+	expect(fs.readdirSync(foreign)).toEqual(["x.txt"]);
+	desk.takeDialogs();
+});
+
+test("data folder: the header chip opens its Git tab", async ({ desk }) => {
+	const data = path.join(desk.root, "data");
+	gitRepo(data);
+	desk.useDataDir(data);
+	await desk.launch({});
+	const chip = desk.page.locator("#data-chip");
+	await expect(chip).toContainText("TW Desk data ⎇ main");
+	await chip.click();
+	await expect(desk.page.locator("#log-panel")).toBeVisible();
+	await expect(desk.page.locator("#log-title")).toHaveText("TW Desk data");
+	await expect(desk.page.locator("#git-view .git-repo-title")).toContainText("TW Desk data");
+	await expect(desk.page.locator("#git-view").getByRole("button", { name: "Commit" })).toBeVisible();
+	await expect(desk.page.locator("[data-panel-tab=log]")).toBeHidden();
+});
+
+test("data folder: inside another repository it shows no repository and gets its own", async ({ desk }) => {
+	const outer = path.join(desk.root, "outer");
+	gitRepo(outer);
+	const data = path.join(outer, "data");
+	desk.useDataDir(data);
+	await desk.launch({});
+	const chip = desk.page.locator("#data-chip");
+	await expect(chip).toContainText("no repository");
+	await chip.click();
+	await desk.page.locator("#git-view").getByRole("button", { name: "Initialize repository" }).click();
+	await expect(chip).toContainText("⎇ main");
+	expect(fs.existsSync(path.join(data, ".git"))).toBe(true);
+	expect(sh(outer, "log", "--format=%s")).toBe("init");
+	expect(sh(data, "log", "--format=%s")).toBe("Initial TW Desk data");
+	expect(fs.readFileSync(path.join(data, ".gitignore"), "utf8")).toBe("*.tmp\n");
+	desk.takeDialogs();
+});

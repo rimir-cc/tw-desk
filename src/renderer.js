@@ -91,7 +91,24 @@ function render() {
 			links.forEach((link, index) => list.append(webItem(link, index, links.length)));
 		}
 	}
-	if (logWikiId) {
+	renderDataChip();
+	if (logWikiId === DATA_PANEL) {
+		if (state.dataFolder && state.dataFolder.path) {
+			$("#log-title").textContent = "TW Desk data";
+			for (const tab of document.querySelectorAll("[data-panel-tab]")) {
+				tab.classList.toggle("active", tab.dataset.panelTab === "git");
+				tab.hidden = tab.dataset.panelTab === "log";
+			}
+			$("#log-output").hidden = true;
+			$("#git-view").hidden = false;
+			renderGitView(null);
+		} else {
+			hideLog();
+		}
+	} else if (logWikiId) {
+		for (const tab of document.querySelectorAll("[data-panel-tab]")) {
+			tab.hidden = false;
+		}
 		const wiki = state.wikis.find(w => w.id === logWikiId);
 		if (wiki) {
 			$("#log-title").textContent = wiki.name;
@@ -1000,7 +1017,88 @@ $("#show-settings").addEventListener("click", () => {
 	}[linkConfig.schemeStatus];
 	$("#link-router-status").textContent = linkConfig.routerError || (linkConfig.routerRunning ? "(running)" : "");
 	$("#settings-error").hidden = true;
+	renderDataSettings();
 	$("#settings-dialog").showModal();
+});
+
+// ---------- data folder: Settings, header chip ----------
+
+const DATA_PANEL = "data"; // the bottom panel shows the data folder's Git tab
+
+function dataSummary() {
+	const folder = state.dataFolder && state.dataFolder.path;
+	return folder ? gitSummary(gitStatusOf(folder), { dataFolder: true }) : null;
+}
+
+function renderDataChip() {
+	const chip = $("#data-chip");
+	const summary = dataSummary();
+	chip.hidden = !summary;
+	if (summary) {
+		chip.textContent = "TW Desk data " + summary.text;
+		chip.className = "git-chip " + summary.level;
+		chip.title = "Your data folder: " + state.dataFolder.path + "\n" + summary.title + "\n(click for details)";
+	}
+	if ($("#settings-dialog").open) {
+		renderDataSettings();
+	}
+}
+
+function renderDataSettings() {
+	const folder = state.dataFolder && state.dataFolder.path;
+	$("#data-folder-path").textContent = folder || "–";
+	const summary = dataSummary();
+	$("#data-folder-chip").textContent = summary ? summary.text : "";
+	$("#data-folder-chip").className = summary ? "git-chip " + summary.level : "";
+	$("#data-move").disabled = !folder;
+	$("#data-use-existing").disabled = !folder;
+}
+
+function settingsError(e) {
+	$("#settings-error").textContent = cleanError(e);
+	$("#settings-error").hidden = false;
+}
+
+$("#data-chip").addEventListener("click", () => run(() => showPanel(DATA_PANEL, "git")));
+
+$("#data-folder-path").addEventListener("click", event => {
+	event.preventDefault();
+	if (state.dataFolder.path) {
+		api.git.action("open", state.dataFolder.path);
+	}
+});
+
+$("#data-move").addEventListener("click", async () => {
+	const target = await api.pickFolder("Move the data folder to");
+	if (!target) {
+		return;
+	}
+	try {
+		$("#settings-error").hidden = true;
+		const { old } = await api.dataFolder.move(target);
+		if (confirm("The data folder is now in " + target + ".\n\nRemove the old data folder " + old + "?")) {
+			await api.dataFolder.removeOld(old);
+		}
+	} catch (e) {
+		settingsError(e);
+	}
+});
+
+$("#data-use-existing").addEventListener("click", async () => {
+	const target = await api.pickFolder("Existing data folder");
+	if (!target) {
+		return;
+	}
+	try {
+		$("#settings-error").hidden = true;
+		const warning = replaceWarning(await api.dataFolder.replaceSummary(), target);
+		if (warning && !confirm(warning + "\n\nThe current data folder stays where it is: " + state.dataFolder.path)) {
+			return;
+		}
+		await api.dataFolder.useExisting(target);
+	} catch (e) {
+		settingsError(e);
+	}
 });
 
 settingsForm.addEventListener("submit", async event => {
@@ -1053,7 +1151,7 @@ async function showPanel(id, tab) {
 	panelTab = tab;
 	$("#log-panel").hidden = false;
 	const output = $("#log-output");
-	output.textContent = (await api.getLogs(id)).join("\n");
+	output.textContent = id === DATA_PANEL ? "" : (await api.getLogs(id)).join("\n");
 	render();
 	output.scrollTop = output.scrollHeight;
 }

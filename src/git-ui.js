@@ -35,7 +35,8 @@ function gitBadState(status) {
 }
 
 // { text, level ("" | "warn" | "bad"), title } for a folder's status, or null when git isn't available
-function gitSummary(status) {
+// options.dataFolder: the data folder, where TW Desk commits on its own – unpushed commits only count once they are old
+function gitSummary(status, options = {}) {
 	if (!state.git || !state.git.available) {
 		return null;
 	}
@@ -73,8 +74,15 @@ function gitSummary(status) {
 	} else {
 		if (status.ahead) {
 			parts.push("↑" + status.ahead);
-			titles.push(status.ahead + " commit(s) to push");
-			level = "warn";
+			if (options.dataFolder) {
+				titles.push(status.ahead + " commit(s) to push – TW Desk never pushes on its own");
+				if (status.unpushedSince && Date.now() - status.unpushedSince > state.git.settings.staleHours * 3600000) {
+					level = "warn";
+				}
+			} else {
+				titles.push(status.ahead + " commit(s) to push");
+				level = "warn";
+			}
 		}
 		if (status.behind) {
 			parts.push("↓" + status.behind);
@@ -185,7 +193,8 @@ function renderGitView(wiki) {
 		view.append(gitElement("p", "muted", "Git isn't installed or not on the PATH. Install " + GIT_INSTALL_HINT[state.platform] + " and restart TW Desk."));
 		return;
 	}
-	const folders = [{ path: wiki.path, label: wiki.name }].concat(wiki.includes.filter(i => i.exists).map(i => ({
+	// Without a wiki: the data folder
+	const folders = !wiki ? [{ path: state.dataFolder.path, label: "TW Desk data", dataFolder: true }] : [{ path: wiki.path, label: wiki.name }].concat(wiki.includes.filter(i => i.exists).map(i => ({
 		path: i.resolved,
 		label: folderName(i.resolved) + " (included" + (i.readOnly ? ", read-only" : "") + ")"
 	})));
@@ -229,7 +238,7 @@ function gitRepoSection(folder, status) {
 		title.append(gitElement("span", "muted small", folder.path));
 		section.append(gitElement("div", "small", "This folder isn't under version control."));
 		actions.append(button("Initialize repository", async () => {
-			if (confirm("Create a git repository in\n" + folder.path + "?\n\nAdds a .gitignore (output/, $__StoryList.tid, $__temp*) and commits the current files.")) {
+			if (confirm("Create a git repository in\n" + folder.path + "?\n\n" + (folder.dataFolder ? "Adds a .gitignore (*.tmp) and commits the current files; the repository is the data folder's own, even inside another one." : "Adds a .gitignore (output/, $__StoryList.tid, $__temp*) and commits the current files."))) {
 				await gitAct("init", folder.path);
 			}
 		}, { className: "primary", disabled: gitBusy }), open);
@@ -289,7 +298,8 @@ function gitRepoSection(folder, status) {
 		if (status.fetchError) {
 			section.append(gitElement("div", "error small", "Could not reach the remote: " + status.fetchError));
 		}
-		const running = gitRunningUsers(status.root);
+		// Pulling the data folder stops the running wikis itself
+		const running = folder.dataFolder ? [] : gitRunningUsers(status.root);
 		actions.append(
 			action("Push", "push", null, { disabled: !!status.upstream && !status.ahead, title: "Push commits to " + (status.upstream || "the remote") }),
 			action("Pull", "pull", null, {

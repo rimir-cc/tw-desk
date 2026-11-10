@@ -14,7 +14,10 @@ contextBridge.exposeInMainWorld("twDesk", {
 	pickFolder: title => ipcRenderer.invoke("pick-folder", title),
 	dataFolder: {
 		setup: (mode, target) => ipcRenderer.invoke("data-folder-setup", mode, target),
-		replaceSummary: () => ipcRenderer.invoke("data-folder-replace-summary")
+		replaceSummary: () => ipcRenderer.invoke("data-folder-replace-summary"),
+		move: target => ipcRenderer.invoke("data-folder-move", target),
+		removeOld: old => ipcRenderer.invoke("data-folder-remove-old", old),
+		useExisting: target => ipcRenderer.invoke("data-folder-use-existing", target)
 	},
 	pickFile: (title, filters) => ipcRenderer.invoke("pick-file", title, filters),
 	saveWiki: wiki => ipcRenderer.invoke("save-wiki", wiki),

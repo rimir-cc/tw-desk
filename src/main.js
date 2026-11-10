@@ -180,6 +180,85 @@ function saveConfig(action) {
 // Filled in with the data folder's auto-commit
 function dataChanged() {}
 
+async function commitData() {
+	return false;
+}
+
+let movedFrom = null; // the data folder before the last move (only that one may be removed)
+
+function inside(child, parent) {
+	const relative = path.relative(folderKey(parent), folderKey(child));
+	return !relative || (!relative.startsWith("..") && !path.isAbsolute(relative));
+}
+
+// Copies the data folder (with .git) to target, switches to it and restarts the wikis that were running
+async function moveDataFolder(target) {
+	if (!dataDir) {
+		throw new Error("There is no data folder yet.");
+	}
+	const state = dataFolder.folderState(target);
+	if (state !== "missing" && state !== "empty") {
+		throw new Error("This folder isn't empty. Choose an empty or a new folder for the data folder.");
+	}
+	if (inside(target, dataDir) || inside(dataDir, target)) {
+		throw new Error("The new place can't be inside the data folder, or contain it.");
+	}
+	await commitData();
+	const running = await stopAllWikis();
+	const old = dataDir;
+	try {
+		dataFolder.copyTree(old, target);
+		// Relative paths depend on where the data folder is
+		fs.writeFileSync(path.join(target, "config.json"), JSON.stringify(dataFolder.storeConfigPaths(dataFolder.splitLocal(config).shared, target), null, 2));
+		dataFolder.writePointer(userDataDir(), target);
+	} catch (e) {
+		if (state === "missing") {
+			fs.rmSync(target, { recursive: true, force: true });
+		}
+		running.forEach(id => startWiki(id));
+		throw e;
+	}
+	useDataDir(target);
+	dataChanged("Moved the data folder from " + old);
+	movedFrom = old;
+	running.forEach(id => startWiki(id));
+	return { old };
+}
+
+ipcMain.handle("data-folder-move", (event, target) => {
+	if (typeof target !== "string" || !path.isAbsolute(target)) {
+		throw new Error("Please choose a folder.");
+	}
+	return moveDataFolder(path.resolve(target));
+});
+
+ipcMain.handle("data-folder-remove-old", (event, old) => {
+	if (!movedFrom || folderKey(old) !== folderKey(movedFrom) || isDataDir(old)) {
+		throw new Error("Only the previous data folder can be removed here.");
+	}
+	fs.rmSync(movedFrom, { recursive: true, force: true });
+	movedFrom = null;
+});
+
+// Settings: another data folder replaces the current setup; the current data folder stays on disk
+ipcMain.handle("data-folder-use-existing", async (event, target) => {
+	if (typeof target !== "string" || !path.isAbsolute(target)) {
+		throw new Error("Please choose a folder.");
+	}
+	const folder = path.resolve(target);
+	if (isDataDir(folder)) {
+		throw new Error("This is the data folder already.");
+	}
+	if (dataFolder.folderState(folder) !== "data") {
+		throw new Error("This isn't a TW Desk data folder (it has no config.json): " + folder);
+	}
+	await commitData();
+	await stopAllWikis();
+	fs.rmSync(localPath(), { force: true });
+	dataFolder.writePointer(userDataDir(), folder);
+	useDataDir(folder);
+});
+
 // Stops all running wikis and waits until they have stopped; returns their ids
 async function stopAllWikis() {
 	const running = config.wikis.filter(w => ["running", "starting"].includes(serverState(w.id).status)).map(w => w.id);
@@ -830,9 +909,12 @@ function gitSnapshot() {
 	};
 }
 
-// The managed wikis and the folders they include (when those exist)
+// The managed wikis, the folders they include (when those exist) and the data folder
 function gitFolders() {
 	const folders = new Map();
+	if (dataDir) {
+		folders.set(folderKey(dataDir), dataDir);
+	}
 	for (const wiki of config.wikis) {
 		folders.set(folderKey(wiki.path), path.resolve(wiki.path));
 		for (const include of readIncludes(wiki.path).includes) {
@@ -887,7 +969,8 @@ async function runGitCheck(options) {
 	for (const folder of folders) {
 		let entry;
 		try {
-			const root = await git.repoRoot(folder);
+			// The data folder counts only with its own repository, never as part of an outer one
+			const root = isDataDir(folder) && !dataFolder.ownRepo(folder) ? null : await git.repoRoot(folder);
 			if (!root) {
 				entry = { repo: false };
 			} else {
@@ -932,6 +1015,10 @@ function wikisUsingRepo(root) {
 	return config.wikis.filter(w => inside(w.path) || readIncludes(w.path).includes.some(i => inside(i.resolved)));
 }
 
+function isDataDir(folder) {
+	return !!dataDir && folderKey(folder) === folderKey(dataDir);
+}
+
 async function gitAction(action, folder, arg) {
 	const resolved = path.resolve(folder);
 	if (!gitFolders().some(f => folderKey(f) === folderKey(resolved))) {
@@ -939,6 +1026,22 @@ async function gitAction(action, folder, arg) {
 	}
 	if (action === "open") {
 		await shell.openPath(resolved);
+		return;
+	}
+	if (isDataDir(resolved) && ["init", "pull"].includes(action)) {
+		if (action === "init") {
+			if (dataFolder.ownRepo(resolved)) {
+				throw new Error("The data folder already has a git repository.");
+			}
+			await initDataRepo(resolved);
+		} else {
+			// Running wikis got the store's path when they started, and the pulled config may change them
+			await commitData();
+			await stopAllWikis();
+			await git.pull(resolved);
+			useDataDir(resolved);
+		}
+		await checkGit({ fetch: false });
 		return;
 	}
 	if (action === "init") {

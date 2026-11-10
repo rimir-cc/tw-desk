@@ -12,6 +12,7 @@
 	<span id="tw-version" class="muted"></span>
 	<span class="spacer"></span>
 	<button id="show-includes" title="Which folders are included by which wikis">Includes</button>
+	<button id="data-chip" class="git-chip" hidden></button>
 	<button id="show-plugins" title="Shared plugin store, libraries and the plugins of each wiki">Plugins</button>
 	<button id="show-settings" title="Start port for automatic ports">Settings</button>
 	<button id="new-menu" class="primary" title="New wiki, existing wiki folder or group">+ New ▾</button>
@@ -211,6 +212,16 @@
 		<label class="inline"><input name="linkRouter" type="checkbox"> Answer http links in browsers: start the wiki and go there (always on while http links are copied) <small class="muted" id="link-router-status"></small></label>
 		<label class="inline"><input name="linkScheme" type="checkbox"> Open twdesk:// links from other programs <small class="muted" id="link-scheme-status"></small></label>
 		<label class="inline"><input name="linkPlugin" type="checkbox"> Load the built-in “TW Desk links” plugin into the wikis (the copy button; applies when a wiki is restarted)</label>
+		<div class="field-title">Data folder</div>
+		<div class="row data-folder-row">
+			<a href="#" id="data-folder-path" title="Show the folder"></a>
+			<span id="data-folder-chip"></span>
+		</div>
+		<small class="muted">Your wiki list, settings, plugin store and web wikis, in their own git repository. TW Desk commits changes on its own; pushing is up to you.</small>
+		<div class="row">
+			<button type="button" id="data-move" title="Copy the data folder (with its repository) to another place and use it from there">Move…</button>
+			<button type="button" id="data-use-existing" title="Use another data folder, e.g. a clone of your data repository; it replaces the current setup">Use existing…</button>
+		</div>
 		<div class="field-title">Move or share this setup</div>
 		<div class="row">
 			<button type="button" id="export-setup" title="Write wikis (with their git remotes), groups, web wikis, store plugins, libraries and settings into one file">Export setup…</button>

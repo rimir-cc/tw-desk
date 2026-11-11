@@ -52,6 +52,7 @@ test("data folder: the plugin store lives in it, not in the user-data folder", a
 // ---------- choosing the data folder (first start) ----------
 
 const { sh } = require("../helpers/git-env");
+const { execFileSync } = require("child_process");
 
 function writeJson(file, value) {
 	fs.mkdirSync(path.dirname(file), { recursive: true });
@@ -434,4 +435,72 @@ test("data folder: one without config.json counts as not found", async ({ desk }
 	await desk.launch({}, { dataEnv: false, writeConfig: false });
 	await expect(desk.page.locator("#data-setup-text")).toContainText("wasn't found");
 	await expect(desk.page.locator("#data-setup-text")).toContainText(empty);
+});
+
+// ---------- pull and the push reminder ----------
+
+// A data folder with config, committed and pushed to a bare remote; returns { data, remote }
+function dataRepoWithRemote(desk, config) {
+	const data = path.join(desk.root, "data");
+	writeJson(path.join(data, "config.json"), Object.assign({ basePort: 18390, groups: [], wikis: [], webWikis: [], git: { interval: 0, fetch: false, staleHours: 24, autoCommitOnStop: false }, webCheck: false }, config));
+	sh(data, "init", "--quiet");
+	sh(data, "add", "-A");
+	sh(data, "commit", "--quiet", "-m", "setup");
+	const remote = path.join(desk.root, "remote.git");
+	sh(desk.root, "init", "--bare", "--quiet", remote);
+	sh(data, "remote", "add", "origin", remote);
+	sh(data, "push", "--quiet", "-u", "origin", "main");
+	return { data, remote };
+}
+
+test("data folder: Pull stops running wikis and reloads the setup", async ({ desk }) => {
+	const alpha = desk.wiki("alpha");
+	const { data, remote } = dataRepoWithRemote(desk, { wikis: [{ id: "alpha-id", name: "Alpha", path: alpha, autostart: false }] });
+	// The other computer adds a group
+	const other = path.join(desk.root, "other");
+	sh(desk.root, "clone", "--quiet", remote, other);
+	const config = JSON.parse(fs.readFileSync(path.join(other, "config.json"), "utf8"));
+	config.groups.push({ id: "laptop-id", name: "From laptop" });
+	fs.writeFileSync(path.join(other, "config.json"), JSON.stringify(config, null, 2));
+	sh(other, "commit", "--quiet", "-am", "group from the laptop");
+	sh(other, "push", "--quiet");
+
+	desk.useDataDir(data);
+	await desk.launch({}, { writeConfig: false, env: { TW_DESK_DATA_COMMIT_DELAY: "600000" } });
+	await desk.startWiki("Alpha");
+	const chip = desk.page.locator("#data-chip");
+	await chip.click();
+	const view = desk.page.locator("#git-view");
+	await view.getByRole("button", { name: "Fetch now" }).click();
+	await expect(chip).toContainText("↓1");
+	await view.getByRole("button", { name: "Pull" }).click();
+	await expect(desk.groupHeader("From laptop")).toBeVisible();
+	await expect(desk.row("Alpha").locator(".wiki-meta")).toContainText("stopped");
+	expect(sh(data, "rev-parse", "HEAD")).toBe(sh(other, "rev-parse", "HEAD"));
+	await expect(chip).toContainText("⎇ main ✓");
+});
+
+test("data folder: the chip reminds to push only once commits are old", async ({ desk }) => {
+	const { data } = dataRepoWithRemote(desk, {});
+	const commitAt = (file, date) => {
+		fs.writeFileSync(path.join(data, file), file);
+		sh(data, "add", "-A");
+		execFileSync("git", ["commit", "--quiet", "-m", file], { cwd: data, env: Object.assign({}, process.env, { GIT_AUTHOR_DATE: date, GIT_COMMITTER_DATE: date }) });
+	};
+	// Unpushed for an hour: shown, but not a reminder yet (staleHours 24)
+	commitAt("recent.txt", new Date(Date.now() - 3600000).toISOString());
+	desk.useDataDir(data);
+	await desk.launch({}, { writeConfig: false });
+	const chip = desk.page.locator("#data-chip");
+	await expect(chip).toContainText("↑1");
+	await expect(chip).not.toHaveClass(/warn/);
+	await expect(chip).toHaveAttribute("title", /TW Desk never pushes on its own/);
+
+	// Waiting for two days: amber
+	await desk.quit();
+	sh(data, "reset", "--quiet", "--hard", "HEAD~1");
+	commitAt("old.txt", new Date(Date.now() - 2 * 24 * 3600000).toISOString());
+	await desk.launch({}, { writeConfig: false });
+	await expect(desk.page.locator("#data-chip")).toContainText("↑1");
+	await expect(desk.page.locator("#data-chip")).toHaveClass(/warn/);
 });

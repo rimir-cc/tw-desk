@@ -6,6 +6,7 @@ contextBridge.exposeInMainWorld("twDesk", {
 	getState: () => ipcRenderer.invoke("get-state"),
 	getLogs: id => ipcRenderer.invoke("get-logs", id),
 	saveSettings: settings => ipcRenderer.invoke("save-settings", settings),
+	openWindowSize: () => ipcRenderer.invoke("open-window-size"),
 	git: {
 		action: (action, folder, arg) => ipcRenderer.invoke("git-action", action, folder, arg),
 		checkOnFocus: () => ipcRenderer.invoke("git-check-focus"),

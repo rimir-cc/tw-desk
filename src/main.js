@@ -701,6 +701,7 @@ function snapshot() {
 		platform: process.platform,
 		caseInsensitivePaths: CASE_INSENSITIVE_PATHS,
 		basePort: config.basePort,
+		windowSize: windowSizeSetting(),
 		git: gitSnapshot(),
 		groups: config.groups,
 		ungroupedCollapsed: !!config.ungroupedCollapsed,
@@ -1084,13 +1085,45 @@ async function ensureRunning(id) {
 	}
 }
 
-// Wiki and snapshot windows: 2700 × 1400, but no larger than the screen they open on (the one with the mouse)
+// Wiki and snapshot windows: the size from Settings (per computer, in local.json), but no larger than the screen they
+// open on (the one with the mouse)
 const WIKI_WINDOW = { width: 2700, height: 1400 };
+const WINDOW_LIMITS = { min: 400, max: 10000 };
+
+function windowSizeSetting() {
+	const size = config.windowSize;
+	const valid = n => Number.isInteger(n) && n >= WINDOW_LIMITS.min && n <= WINDOW_LIMITS.max;
+	return size && valid(size.width) && valid(size.height) ? { width: size.width, height: size.height } : Object.assign({}, WIKI_WINDOW);
+}
 
 function wikiWindowSize() {
+	const wanted = windowSizeSetting();
 	const area = screen.getDisplayNearestPoint(screen.getCursorScreenPoint()).workAreaSize;
-	return { width: Math.min(WIKI_WINDOW.width, area.width), height: Math.min(WIKI_WINDOW.height, area.height) };
+	return { width: Math.min(wanted.width, area.width), height: Math.min(wanted.height, area.height) };
 }
+
+// The size of the wiki or snapshot window used last (for "Use the size of an open wiki window")
+function openWikiWindowSize() {
+	const open = BrowserWindow.getAllWindows().filter(w => !w.isDestroyed() && w !== managerWindow && w.twDeskWikiWindow);
+	if (!open.length) {
+		return null;
+	}
+	const win = open.find(w => w === lastWikiWindow) || open[open.length - 1];
+	const [width, height] = win.getSize();
+	return { width, height };
+}
+
+let lastWikiWindow = null;
+
+function markWikiWindow(win) {
+	win.twDeskWikiWindow = true;
+	lastWikiWindow = win;
+	win.on("focus", () => {
+		lastWikiWindow = win;
+	});
+}
+
+ipcMain.handle("open-window-size", () => openWikiWindowSize());
 
 async function openWiki(id, external) {
 	const wiki = findWiki(id);
@@ -1140,6 +1173,7 @@ async function openWiki(id, external) {
 	confirmUnload(win, "\u201c" + wiki.name + "\u201d has changes that haven't been saved yet.", "TiddlyWiki is still saving them to the wiki folder. Wait a moment and close the window again, or close it anyway and lose those changes.");
 	win.on("closed", () => wikiWindows.delete(id));
 	wikiWindows.set(id, win);
+	markWikiWindow(win);
 	win.loadURL(url);
 	return win;
 }
@@ -2046,6 +2080,12 @@ ipcMain.handle("save-settings", (event, input) => {
 	if (!(staleHours > 0)) {
 		throw new Error("The hours for old uncommitted changes must be a positive number.");
 	}
+	const windowWidth = Number(input.windowWidth);
+	const windowHeight = Number(input.windowHeight);
+	const validSize = n => Number.isInteger(n) && n >= WINDOW_LIMITS.min && n <= WINDOW_LIMITS.max;
+	if (!validSize(windowWidth) || !validSize(windowHeight)) {
+		throw new Error("The window size must be whole numbers between " + WINDOW_LIMITS.min + " and " + WINDOW_LIMITS.max + " pixels.");
+	}
 	const linkPort = Number(input.linkPort);
 	if (!validPort(linkPort)) {
 		throw new Error("The port for http links must be a number between 1024 and 65535.");
@@ -2057,6 +2097,7 @@ ipcMain.handle("save-settings", (event, input) => {
 	config.basePort = basePort;
 	config.git = { interval, fetch: !!input.gitFetch, staleHours, autoCommitOnStop: !!input.gitAutoCommit };
 	config.webCheck = !!input.webCheck;
+	config.windowSize = { width: windowWidth, height: windowHeight };
 	config.links = { style: input.linkStyle === "http" ? "http" : "scheme", port: linkPort, router: !!input.linkRouter, scheme: !!input.linkScheme, plugin: !!input.linkPlugin };
 	saveConfig("Changed settings");
 	scheduleGitChecks();
@@ -2834,6 +2875,7 @@ function openSnapshot(id) {
 	});
 	confirmUnload(win, "Close the snapshot of \u201c" + link.name + "\u201d?", "Changes made in a snapshot are never saved – they are lost when the window closes. To keep working with this wiki, use \u201cMake wiki from snapshot\u2026\u201d in its \u22ef menu.");
 	win.on("closed", () => snapshotWindows.delete(id));
+	markWikiWindow(win);
 	snapshotWindows.set(id, win);
 	win.loadFile(snapshotFile(id));
 }

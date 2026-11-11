@@ -46,6 +46,7 @@ test("splitLocal / mergeLocal", () => {
 		groups: [{ id: "g", name: "G", collapsed: true }],
 		webCollapsed: true,
 		ungroupedCollapsed: false,
+		windowSize: { width: 1800, height: 1000 },
 		basePort: 8090
 	};
 	const { shared, local } = dataFolder.splitLocal(config);
@@ -54,7 +55,7 @@ test("splitLocal / mergeLocal", () => {
 	assert.equal("collapsed" in shared.groups[0], false);
 	assert.equal("webCollapsed" in shared, false);
 	assert.equal("ungroupedCollapsed" in shared, false);
-	assert.deepEqual(local, { wikis: { a: { lastPort: 8100 } }, webWikis: { l: { check: { date: "d", result: "same" } } }, groups: { g: { collapsed: true } }, webCollapsed: true, ungroupedCollapsed: false });
+	assert.deepEqual(local, { wikis: { a: { lastPort: 8100 } }, webWikis: { l: { check: { date: "d", result: "same" } } }, groups: { g: { collapsed: true } }, webCollapsed: true, ungroupedCollapsed: false, windowSize: { width: 1800, height: 1000 } });
 	assert.deepEqual(dataFolder.mergeLocal(shared, local), config);
 	assert.deepEqual(dataFolder.mergeLocal(shared, {}).wikis[0], shared.wikis[0]);
 	assert.equal(config.wikis[0].lastPort, 8100, "input unchanged");

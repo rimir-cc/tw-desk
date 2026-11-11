@@ -283,4 +283,7 @@ textarea, input:not([type=checkbox]):not([type=radio]) {
 .wiki-meta.missing { color: var(--error); }
 .missing-banner { margin: 0 0 8px; padding: 8px 12px; border: 1px solid var(--starting); border-radius: 6px; background: var(--panel); }
 .data-folder-row { align-items: center; gap: 8px; flex-wrap: wrap; }
+.window-size-row { align-items: flex-end; gap: 8px; flex-wrap: wrap; }
+.window-size-row label { display: inline-flex; flex-direction: column; }
+.window-size-row input { width: 7em; }
 #data-folder-path { word-break: break-all; }

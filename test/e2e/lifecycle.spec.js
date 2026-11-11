@@ -155,3 +155,45 @@ test("wiki windows open at 2700 × 1400, at most the screen's size", async ({ de
 	expect(Math.abs(sizes.size[0] - expected[0])).toBeLessThanOrEqual(2);
 	expect(Math.abs(sizes.size[1] - expected[1])).toBeLessThanOrEqual(2);
 });
+
+test("the size of new wiki windows is set in Settings (kept per computer), also from an open window", async ({ desk }) => {
+	const alpha = desk.wiki("alpha");
+	await desk.launch({ wikis: [{ name: "Alpha", path: alpha }] });
+	const row = desk.row("Alpha");
+	const win = await desk.windowOpenedBy(() => row.getByRole("button", { name: "Open", exact: true }).click());
+	const sizeOf = address => desk.app.evaluate(({ BrowserWindow }, url) => BrowserWindow.getAllWindows().find(w => w.webContents.getURL().startsWith(url)).getSize(), address);
+	await desk.app.evaluate(({ BrowserWindow }, url) => BrowserWindow.getAllWindows().find(w => w.webContents.getURL().startsWith(url)).setSize(1000, 750), win.url());
+	await expect.poll(() => sizeOf(win.url())).toEqual([1000, 750]);
+
+	await desk.page.locator("#show-settings").click();
+	const form = desk.page.locator("#settings-form");
+	await expect(form.locator("[name=windowWidth]")).toHaveValue("2700");
+	await expect(form.locator("[name=windowHeight]")).toHaveValue("1400");
+	await form.getByRole("button", { name: "Use the size of an open wiki window" }).click();
+	await expect(form.locator("[name=windowWidth]")).toHaveValue("1000");
+	await expect(form.locator("[name=windowHeight]")).toHaveValue("750");
+	await form.locator("[name=windowWidth]").fill("900");
+	await form.locator("[name=windowHeight]").fill("700");
+	await form.getByRole("button", { name: "Save" }).click();
+	await expect(desk.page.locator("#settings-dialog")).toBeHidden();
+
+	expect(desk.config().windowSize).toEqual({ width: 900, height: 700 });
+	expect(desk.rawConfig().windowSize).toBeUndefined();
+	await win.close();
+	const next = await desk.windowOpenedBy(() => row.getByRole("button", { name: "Open", exact: true }).click());
+	expect(await sizeOf(next.url())).toEqual([900, 700]);
+});
+
+test("Settings refuses an impossible window size", async ({ desk }) => {
+	await desk.launch({});
+	await desk.page.locator("#show-settings").click();
+	const form = desk.page.locator("#settings-form");
+	await form.locator("[name=windowWidth]").fill("50");
+	await form.getByRole("button", { name: "Save" }).click();
+	await expect(desk.page.locator("#settings-dialog")).toBeVisible();
+	expect(await form.locator("[name=windowWidth]").evaluate(input => input.validity.valid)).toBe(false);
+	// The main process checks too
+	const error = await desk.page.evaluate(() => window.twDesk.saveSettings({ basePort: 18390, gitInterval: 0, gitStaleHours: 24, windowWidth: 50, windowHeight: 700, linkPort: 18999 }).then(() => null, e => e.message));
+	expect(error).toContain("window size");
+	expect(desk.config().windowSize).toBeUndefined();
+});

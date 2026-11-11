@@ -1022,6 +1022,9 @@ const settingsForm = $("#settings-form");
 
 $("#show-settings").addEventListener("click", () => {
 	settingsForm.elements.basePort.value = state.basePort;
+	settingsForm.elements.windowWidth.value = state.windowSize.width;
+	settingsForm.elements.windowHeight.value = state.windowSize.height;
+	$("#window-size-note").hidden = true;
 	const git = state.git.settings;
 	settingsForm.elements.gitInterval.value = git.interval;
 	settingsForm.elements.gitFetch.checked = git.fetch;
@@ -1134,6 +1137,19 @@ $("#data-use-existing").addEventListener("click", async () => {
 	}
 });
 
+$("#window-size-from-open").addEventListener("click", async () => {
+	const size = await api.openWindowSize();
+	const note = $("#window-size-note");
+	if (!size) {
+		note.textContent = "No wiki window is open. Open one, size it the way you like, then use this button.";
+		note.hidden = false;
+		return;
+	}
+	settingsForm.elements.windowWidth.value = size.width;
+	settingsForm.elements.windowHeight.value = size.height;
+	note.hidden = true;
+});
+
 settingsForm.addEventListener("submit", async event => {
 	event.preventDefault();
 	try {
@@ -1145,6 +1161,8 @@ settingsForm.addEventListener("submit", async event => {
 			gitStaleHours: Number(fields.gitStaleHours.value),
 			gitAutoCommit: fields.gitAutoCommit.checked,
 			webCheck: fields.webCheck.checked,
+			windowWidth: Number(fields.windowWidth.value),
+			windowHeight: Number(fields.windowHeight.value),
 			linkStyle: fields.linkStyle.value,
 			linkPort: Number(fields.linkPort.value),
 			linkRouter: fields.linkRouter.checked,

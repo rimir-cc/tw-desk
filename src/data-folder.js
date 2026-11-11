@@ -61,7 +61,7 @@ function resolveConfigPaths(config, dataDir) {
 
 // Per item: the fields that are machine-specific or change by just using the app
 const LOCAL_ITEM_FIELDS = { wikis: ["lastPort"], webWikis: ["check"], groups: ["collapsed"] };
-const LOCAL_TOP_FIELDS = ["webCollapsed", "ungroupedCollapsed"];
+const LOCAL_TOP_FIELDS = ["webCollapsed", "ungroupedCollapsed", "windowSize"];
 
 function splitLocal(config) {
 	const shared = Object.assign({}, config);

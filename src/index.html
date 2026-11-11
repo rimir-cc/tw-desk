@@ -189,6 +189,14 @@
 			<input name="basePort" type="number" min="1024" max="65535" required>
 			<small class="muted">A wiki without a fixed port gets the port it used last time if that's free, otherwise the next free port from here on. Applies when a wiki is (re)started.</small>
 		</label>
+		<div class="field-title">Wiki windows</div>
+		<div class="row window-size-row">
+			<label>Width <input name="windowWidth" type="number" min="400" max="10000" step="1" required></label>
+			<label>Height <input name="windowHeight" type="number" min="400" max="10000" step="1" required></label>
+			<button type="button" id="window-size-from-open" title="Size a wiki window the way you like it, then take its size (with its borders) from here">Use the size of an open wiki window</button>
+		</div>
+		<small class="muted">Size of newly opened wiki and snapshot windows (in pixels, with their borders), at most the size of the screen. Kept for this computer only.</small>
+		<p id="window-size-note" class="muted" hidden></p>
 		<div class="field-title">Git</div>
 		<label>Check every (seconds)
 			<input name="gitInterval" type="number" min="0" step="1" required>

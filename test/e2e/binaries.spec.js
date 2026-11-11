@@ -36,7 +36,8 @@ test("binaries: externalize on stop", async ({ desk }) => {
 	putBinary(alpha, "scan.png", "Scan");
 	await desk.stopWiki("Alpha");
 	await expect.poll(() => exists(alpha, "files", "scan.png")).toBe(true);
-	expect(exists(alpha, "tiddlers", "scan.png.tid")).toBe(true);
+	// The policy writes the file first, then its .tid
+	await expect.poll(() => exists(alpha, "tiddlers", "scan.png.tid")).toBe(true);
 	expect(gitignore(alpha)).not.toContain("files/");
 });
 

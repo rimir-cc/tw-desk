@@ -291,11 +291,12 @@ ipcMain.handle("data-folder-move", (event, target) => {
 	return moveDataFolder(path.resolve(target));
 });
 
-ipcMain.handle("data-folder-remove-old", (event, old) => {
+// To the recycle bin: recoverable, and fs.rmSync fails on Windows on git's read-only object files
+ipcMain.handle("data-folder-remove-old", async (event, old) => {
 	if (!movedFrom || folderKey(old) !== folderKey(movedFrom) || isDataDir(old)) {
 		throw new Error("Only the previous data folder can be removed here.");
 	}
-	fs.rmSync(movedFrom, { recursive: true, force: true });
+	await shell.trashItem(movedFrom);
 	movedFrom = null;
 });
 

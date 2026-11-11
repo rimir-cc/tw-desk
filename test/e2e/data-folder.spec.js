@@ -196,8 +196,10 @@ test("data folder: move it in Settings", async ({ desk }) => {
 	expect(fs.existsSync(path.join(target, ".git"))).toBe(true);
 	expect(JSON.parse(fs.readFileSync(path.join(desk.userData, "data-folder.json"), "utf8")).path).toBe(target);
 	const asked = (await desk.takeDialogs()).map(d => d.message).join("\n");
-	expect(asked).toContain("Remove the old data folder " + old);
-	await expect.poll(() => fs.existsSync(old)).toBe(false);
+	// To the recycle bin, not deleted: git's read-only object files can't be deleted on Windows, and it stays recoverable
+	expect(asked).toContain("Move the old data folder " + old + " to the");
+	await expect.poll(async () => (await desk.mainCalls()).trashed).toEqual([old]);
+	await expect(desk.page.locator("#settings-error")).toBeHidden();
 	expect((await desk.state()).wikis.map(w => w.name)).toEqual(["Alpha"]);
 });
 

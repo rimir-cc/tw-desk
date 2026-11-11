@@ -1091,7 +1091,7 @@ $("#data-move").addEventListener("click", async () => {
 	try {
 		$("#settings-error").hidden = true;
 		const { old } = await api.dataFolder.move(target);
-		if (confirm("The data folder is now in " + target + ".\n\nRemove the old data folder " + old + "?")) {
+		if (confirm("The data folder is now in " + target + ".\n\nMove the old data folder " + old + " to the " + trashName() + "?")) {
 			await api.dataFolder.removeOld(old);
 		}
 	} catch (e) {

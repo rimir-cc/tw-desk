@@ -80,6 +80,8 @@ test("order: move up/down and drag & drop between groups", async ({ desk }) => {
 	await expect(page.getByRole("menuitem", { name: "Move up" })).toBeDisabled();
 	await page.getByRole("menuitem", { name: "Move down" }).click();
 	await expect.poll(() => order(desk)).toEqual({ "": ["Two", "One", "Three"] });
+	// The list is rebuilt after the move: a drag started before that loses its row
+	await expect(page.locator("li.wiki .wiki-name")).toHaveText([/^Two/, /^One/, /^Three/]);
 
 	// Drop onto the group header: into the group
 	await desk.row("Three").dragTo(desk.groupHeader("Work"));

@@ -92,3 +92,66 @@ test("automatic ports skip a busy port; a fixed port is used as given", async ({
 		blocker.close();
 	}
 });
+
+// ---------- Restart ----------
+
+const startCount = async (desk, name) => {
+	const id = (await desk.wikiState(name)).id;
+	return ((await desk.page.evaluate(wiki => window.twDesk.getLogs(wiki), id)).join("\n").match(/Starting TiddlyWiki/g) || []).length;
+};
+
+test("Restart restarts the server and reloads its open window", async ({ desk }) => {
+	const alpha = desk.wiki("alpha");
+	await desk.launch({ wikis: [{ name: "Alpha", path: alpha }] });
+	const row = desk.row("Alpha");
+	await expect(row.getByRole("button", { name: "Restart", exact: true })).toHaveCount(0);
+	const win = await desk.windowOpenedBy(() => row.getByRole("button", { name: "Open", exact: true }).click());
+	await expect.poll(() => win.evaluate(() => window.$tw && $tw.wiki && $tw.wiki.getTiddlerText("Hello")), { timeout: 30000 }).toBe("Hello from alpha");
+	const port = (await desk.wikiState("Alpha")).port;
+	// TiddlyWiki reads tiddler files only when it starts
+	fs.writeFileSync(path.join(alpha, "tiddlers", "Fresh.tid"), "title: Fresh\n\nadded on disk");
+	await row.getByRole("button", { name: "Restart", exact: true }).click();
+	await expect.poll(() => win.evaluate(() => window.$tw && $tw.wiki && $tw.wiki.getTiddlerText("Fresh")).catch(() => null), { timeout: 60000 }).toBe("added on disk");
+	await expect(row.locator(".wiki-meta")).toContainText("running");
+	expect(await startCount(desk, "Alpha")).toBe(2);
+	expect((await desk.wikiState("Alpha")).port).toBe(port);
+	const windows = await desk.app.evaluate(({ BrowserWindow }, address) => BrowserWindow.getAllWindows().filter(w => w.webContents.getURL().startsWith(address)).length, win.url());
+	expect(windows).toBe(1);
+	expect((await desk.mainCalls()).questions).toEqual([]);
+});
+
+test("Restart asks first when the open window has unsaved changes", async ({ desk }) => {
+	const alpha = desk.wiki("alpha");
+	await desk.launch({ wikis: [{ name: "Alpha", path: alpha }] });
+	const row = desk.row("Alpha");
+	const win = await desk.windowOpenedBy(() => row.getByRole("button", { name: "Open", exact: true }).click());
+	await expect.poll(() => win.evaluate(() => !!(window.$tw && $tw.syncer)), { timeout: 30000 }).toBe(true);
+	await win.evaluate(() => {
+		$tw.syncer.isDirty = () => true;
+	});
+	// No answer: the default is not to restart
+	await desk.rowMenu(row, "Restart");
+	await expect.poll(async () => (await desk.mainCalls()).questions.join("\n")).toContain("unsaved changes");
+	await desk.page.waitForTimeout(1000);
+	expect(await startCount(desk, "Alpha")).toBe(1);
+	// Restart anyway
+	await desk.answer(0);
+	await desk.rowMenu(row, "Restart");
+	await expect.poll(() => startCount(desk, "Alpha"), { timeout: 60000 }).toBe(2);
+	await expect(row.locator(".wiki-meta")).toContainText("running", { timeout: 60000 });
+});
+
+test("wiki windows open at 2700 × 1400, at most the screen's size", async ({ desk }) => {
+	const alpha = desk.wiki("alpha");
+	await desk.launch({ wikis: [{ name: "Alpha", path: alpha }] });
+	const win = await desk.windowOpenedBy(() => desk.row("Alpha").getByRole("button", { name: "Open", exact: true }).click());
+	const sizes = await desk.app.evaluate(({ BrowserWindow, screen }, address) => {
+		const found = BrowserWindow.getAllWindows().find(w => w.webContents.getURL().startsWith(address));
+		const area = screen.getDisplayNearestPoint(screen.getCursorScreenPoint()).workAreaSize;
+		return { size: found.getSize(), area: [area.width, area.height] };
+	}, win.url());
+	// A window as large as the screen may come out a pixel smaller (X11)
+	const expected = [Math.min(2700, sizes.area[0]), Math.min(1400, sizes.area[1])];
+	expect(Math.abs(sizes.size[0] - expected[0])).toBeLessThanOrEqual(2);
+	expect(Math.abs(sizes.size[1] - expected[1])).toBeLessThanOrEqual(2);
+});

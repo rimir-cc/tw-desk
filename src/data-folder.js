@@ -174,6 +174,37 @@ function repointPlan(items, oldParent, newParent, exists, key) {
 	}).filter(entry => entry.to);
 }
 
+// ---------- wikis inside the data folder ----------
+
+// They have their own history: kept out of the data folder's commits via .git/info/exclude
+function wikiExcludes(wikiPaths, dataDir) {
+	const lines = [];
+	for (const p of wikiPaths) {
+		const relative = path.relative(path.resolve(dataDir), path.resolve(p));
+		if (relative && !path.isAbsolute(relative) && relative !== ".." && !relative.startsWith(".." + path.sep)) {
+			lines.push("/" + relative.split(path.sep).join("/") + "/");
+		}
+	}
+	return [...new Set(lines)];
+}
+
+const EXCLUDE_START = "# TW Desk: wikis inside the data folder";
+const EXCLUDE_END = "# TW Desk end";
+
+// The exclude file's text with TW Desk's block replaced by lines (or removed when there are none)
+function withExcludes(text, lines) {
+	let rest = text;
+	const start = rest.indexOf(EXCLUDE_START + "\n");
+	const end = rest.indexOf(EXCLUDE_END + "\n", start);
+	if (start >= 0 && end >= 0) {
+		rest = rest.slice(0, start) + rest.slice(end + EXCLUDE_END.length + 1);
+	}
+	if (!lines.length) {
+		return rest;
+	}
+	return rest + (rest && !rest.endsWith("\n") ? "\n" : "") + [EXCLUDE_START, ...lines, EXCLUDE_END].join("\n") + "\n";
+}
+
 // ---------- files ----------
 
 const POINTER = "data-folder.json";
@@ -282,5 +313,6 @@ module.exports = {
 	toStored, fromStored, storeConfigPaths, resolveConfigPaths,
 	splitLocal, mergeLocal,
 	commitMessage, suggestLocation,
-	missingGroups, repointPlan, replacePrefix
+	missingGroups, repointPlan, replacePrefix,
+	wikiExcludes, withExcludes
 };

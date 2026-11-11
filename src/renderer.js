@@ -203,7 +203,7 @@ function wikiItem(wiki, index, count) {
 	meta.className = "wiki-meta";
 	meta.textContent = wiki.missing
 		? "not found · " + wiki.path
-		: STATUS_TEXT[wiki.status] + " · " + portText(wiki) + (wiki.autostart ? " · autostart" : "") + " · " + wiki.path;
+		: (wiki.restarting ? "restarting…" : STATUS_TEXT[wiki.status]) + " · " + portText(wiki) + (wiki.autostart ? " · autostart" : "") + " · " + wiki.path;
 	meta.classList.toggle("missing", !!wiki.missing);
 	meta.title = wiki.path + (!wiki.fixedPort && wiki.lastPort ? "\nAutomatic port; last used: " + wiki.lastPort : "");
 	info.append(name);
@@ -250,6 +250,7 @@ function wikiItem(wiki, index, count) {
 		running || busy
 			? button("Stop", () => api.stopWiki(wiki.id), { disabled: busy })
 			: button("Start", () => api.startWiki(wiki.id), { disabled: !!wiki.missing, title: wiki.missing ? "The folder wasn't found – ⋯ → Locate…" : "" }),
+		...(running || wiki.restarting ? [restartButton(wiki)] : []),
 		button("Open", () => api.openWiki(wiki.id, false), { className: "primary", disabled: !!wiki.missing, title: wiki.missing ? "The folder wasn't found – ⋯ → Locate…" : "Open in a TW Desk window (starts the server if needed)" }),
 		more
 	);
@@ -365,6 +366,14 @@ function pendingFilesMenu(wiki, busy) {
 	];
 }
 
+const RESTART_TITLE = "Restart: stop and start the server again (reads changed files from disk) and reload its open window";
+
+function restartButton(wiki) {
+	const b = button("↻", () => api.restartWiki(wiki.id), { className: "ghost restart", disabled: !!wiki.restarting, title: wiki.restarting ? "Restarting…" : RESTART_TITLE });
+	b.setAttribute("aria-label", "Restart");
+	return b;
+}
+
 // The "⋯" menu and right-click menu of a wiki row; index and count: its position within its group
 function wikiMenu(wiki, index, count) {
 	const busy = wiki.status === "running" || wiki.status === "starting";
@@ -382,6 +391,8 @@ function wikiMenu(wiki, index, count) {
 		];
 	}
 	return [
+		{ label: "Restart", action: act(() => api.restartWiki(wiki.id)), disabled: wiki.status !== "running", title: wiki.status === "running" ? RESTART_TITLE : "Only a running wiki can be restarted" },
+		"-",
 		{ label: "Open in browser", action: act(() => api.openWiki(wiki.id, true)), title: wiki.url ? "Open " + wiki.url + " in the default browser" : "Starts the server if needed" },
 		{ label: "Show in " + (FILE_MANAGER[state.platform] || "file manager"), action: act(() => api.showFolder(wiki.id)), title: wiki.path },
 		"-",
@@ -1042,7 +1053,14 @@ const DATA_PANEL = "data"; // the bottom panel shows the data folder's Git tab
 
 function dataSummary() {
 	const folder = state.dataFolder && state.dataFolder.path;
-	return folder ? gitSummary(gitStatusOf(folder), { dataFolder: true }) : null;
+	if (!folder) {
+		return null;
+	}
+	const summary = gitSummary(gitStatusOf(folder), { dataFolder: true });
+	if (summary && state.dataFolder.commitError) {
+		return { text: "⎇ commit failed", level: "bad", title: "TW Desk couldn't commit the latest changes:\n" + state.dataFolder.commitError + "\nIt tries again with the next change." };
+	}
+	return summary;
 }
 
 function renderDataChip() {

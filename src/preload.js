@@ -78,6 +78,7 @@ contextBridge.exposeInMainWorld("twDesk", {
 	setGroupCollapsed: (id, collapsed) => ipcRenderer.invoke("set-group-collapsed", id, collapsed),
 	startWiki: id => ipcRenderer.invoke("start-wiki", id),
 	stopWiki: id => ipcRenderer.invoke("stop-wiki", id),
+	restartWiki: id => ipcRenderer.invoke("restart-wiki", id),
 	openWiki: (id, external) => ipcRenderer.invoke("open-wiki", id, external),
 	showFolder: id => ipcRenderer.invoke("show-folder", id),
 	copyText: text => ipcRenderer.invoke("copy-text", text),

@@ -506,3 +506,81 @@ test("data folder: the chip reminds to push only once commits are old", async ({
 	await expect(desk.page.locator("#data-chip")).toContainText("↑1");
 	await expect(desk.page.locator("#data-chip")).toHaveClass(/warn/);
 });
+
+// ---------- edge cases ----------
+
+test("data folder: git actions on one without its own repository never reach the outer one", async ({ desk }) => {
+	const outer = path.join(desk.root, "outer");
+	gitRepo(outer);
+	const data = path.join(outer, "data");
+	desk.useDataDir(data);
+	await desk.launch({});
+	await expect(desk.page.locator("#data-chip")).toContainText("no repository");
+	const error = await desk.page.evaluate(folder => window.twDesk.git.action("commit", folder, "sneaky").then(() => null, e => e.message), data);
+	expect(error).toContain("no git repository of its own");
+	expect(sh(outer, "log", "--format=%s")).toBe("init");
+});
+
+test("data folder: a wiki inside it is left out of its commits", async ({ desk }) => {
+	const data = path.join(desk.root, "data");
+	gitRepo(data);
+	const inner = path.join(data, "wikis", "inner");
+	fs.mkdirSync(path.dirname(inner), { recursive: true });
+	fs.cpSync(desk.wiki("alpha"), inner, { recursive: true });
+	desk.useDataDir(data);
+	await desk.launch({ wikis: [{ name: "Inner", path: inner }] }, { env: { TW_DESK_DATA_COMMIT_DELAY: "500" } });
+	await settled(data);
+	expect(sh(data, "ls-files")).not.toContain("wikis/");
+});
+
+test("data folder: a failed commit shows in the header chip", async ({ desk }) => {
+	const data = await launchWithRepo(desk);
+	await settled(data);
+	fs.writeFileSync(path.join(data, ".git", "index.lock"), "");
+	await desk.page.evaluate(() => window.twDesk.saveGroup({ name: "Work" }));
+	const chip = desk.page.locator("#data-chip");
+	await expect(chip).toContainText("commit failed", { timeout: 20000 });
+	await expect(chip).toHaveAttribute("title", /index\.lock/);
+	fs.rmSync(path.join(data, ".git", "index.lock"));
+	await desk.page.evaluate(() => window.twDesk.saveGroup({ name: "Home" }));
+	await expect(chip).not.toContainText("commit failed", { timeout: 20000 });
+	expect(sh(data, "status", "--porcelain")).toBe("");
+});
+
+test("data folder: a broken config.json leaves local.json alone", async ({ desk }) => {
+	fs.mkdirSync(desk.userData, { recursive: true });
+	fs.writeFileSync(path.join(desk.userData, "config.json"), "{ broken");
+	const local = JSON.stringify({ wikis: { a: { lastPort: 18400 } }, webCollapsed: true }, null, 2);
+	fs.writeFileSync(path.join(desk.userData, "local.json"), local);
+	await desk.launch({}, { writeConfig: false });
+	await expect(desk.page.locator("#config-error")).toContainText("Could not read");
+	await desk.addGroup("Work");
+	expect(fs.readFileSync(path.join(desk.userData, "local.json"), "utf8")).toBe(local);
+});
+
+test("data folder: a wiki started during the first-start dialog is restarted with the new store", async ({ desk }) => {
+	const alpha = desk.wiki("alpha");
+	await desk.launch({ wikis: [{ name: "Alpha", path: alpha }] }, { dataEnv: false });
+	await expect(setupDialog(desk)).toBeVisible();
+	const id = (await desk.wikiState("Alpha")).id;
+	await desk.page.evaluate(wiki => window.twDesk.startWiki(wiki), id);
+	await expect.poll(async () => (await desk.wikiState("Alpha")).status, { timeout: 60000 }).toBe("running");
+	const target = path.join(desk.root, "data");
+	await desk.page.evaluate(folder => window.twDesk.dataFolder.setup("create", folder), target);
+	await expect.poll(async () => (await desk.page.evaluate(wiki => window.twDesk.getLogs(wiki), id)).join("\n").match(/Starting TiddlyWiki/g)?.length, { timeout: 60000 }).toBe(2);
+	await expect.poll(async () => (await desk.wikiState("Alpha")).status, { timeout: 60000 }).toBe("running");
+	expect(fs.existsSync(path.join(target, "store"))).toBe(true);
+});
+
+test("data folder: Use existing keeps local.json when the switch fails", async ({ desk }) => {
+	const existing = preparedDataFolder(desk);
+	await desk.launch({});
+	const local = path.join(desk.userData, "local.json");
+	fs.writeFileSync(local, JSON.stringify({ webCollapsed: true }));
+	// The pointer can't be written: a folder is in its place
+	fs.mkdirSync(path.join(desk.userData, "data-folder.json"));
+	const error = await desk.page.evaluate(folder => window.twDesk.dataFolder.useExisting(folder).then(() => null, e => e.message), existing);
+	expect(error).toBeTruthy();
+	expect(fs.existsSync(local)).toBe(true);
+	expect(await wikiNames(desk)).toEqual([]);
+});

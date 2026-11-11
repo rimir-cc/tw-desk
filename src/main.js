@@ -1,6 +1,6 @@
 "use strict";
 
-const { app, BrowserWindow, ipcMain, dialog, shell, utilityProcess, clipboard, net: electronNet } = require("electron");
+const { app, BrowserWindow, ipcMain, dialog, shell, utilityProcess, clipboard, screen, net: electronNet } = require("electron");
 const fs = require("fs");
 const net = require("net");
 const path = require("path");
@@ -31,6 +31,7 @@ let managerWindow = null;
 let config = { basePort: DEFAULT_BASE_PORT, groups: [], wikis: [], webWikis: [], libraries: [] };
 const servers = new Map(); // wiki id -> { child, status, logs, error }
 const wikiWindows = new Map(); // wiki id -> BrowserWindow
+const restarting = new Set(); // wiki ids being restarted: their window stays open and is reloaded
 let quitting = false;
 
 // ---------- config ----------
@@ -163,13 +164,14 @@ function writeFileSafely(file, text) {
 // config.json (in the data folder) is only written when the setup itself changed; action describes the change for
 // the data folder's next commit
 function saveConfig(action) {
+	// The setup in memory is empty when config.json couldn't be read: neither file is written then
+	if (configError) {
+		return;
+	}
 	const localText = JSON.stringify(dataFolder.splitLocal(config).local, null, 2);
 	if (localText !== lastLocalText) {
 		writeFileSafely(localPath(), localText);
 		lastLocalText = localText;
-	}
-	if (configError) {
-		return;
 	}
 	const text = sharedText();
 	if (text !== lastSharedText) {
@@ -187,6 +189,23 @@ const QUIT_COMMIT_TIMEOUT = 10000;
 let pendingActions = [];
 let dataCommitTimer = null;
 let dataCommitting = null;
+let dataCommitError = null; // the last failed commit's message, shown in the header chip
+
+// Wikis inside the data folder have their own history and stay out of its commits
+function excludeInnerWikis(dir) {
+	const file = path.join(dir, ".git", "info", "exclude");
+	let text = "";
+	try {
+		text = fs.readFileSync(file, "utf8");
+	} catch (e) {
+		// no exclude file yet
+	}
+	const next = dataFolder.withExcludes(text, dataFolder.wikiExcludes(config.wikis.map(w => w.path), dir));
+	if (next !== text) {
+		fs.mkdirSync(path.dirname(file), { recursive: true });
+		fs.writeFileSync(file, next);
+	}
+}
 
 // Something in the data folder changed (action: what, for the commit message)
 function dataChanged(action) {
@@ -217,6 +236,7 @@ function commitData() {
 		}
 		const dir = dataDir;
 		try {
+			excludeInnerWikis(dir);
 			const status = await git.status(dir);
 			if (status.behind > 0 || status.merging || status.conflicts.length || status.detached) {
 				return false;
@@ -228,16 +248,26 @@ function commitData() {
 			const actions = pendingActions;
 			const done = await git.commit(dir, dataFolder.commitMessage(actions, status.changed));
 			pendingActions = pendingActions.slice(actions.length);
+			setDataCommitError(null);
 			checkGit({ folders: [dir] });
 			return done;
 		} catch (e) {
+			// e.g. a .git/index.lock left by a commit cut short when quitting
 			console.error("Committing the data folder failed:", e.message);
+			setDataCommitError(e.message);
 			return false;
 		}
 	};
 	// One commit at a time
 	dataCommitting = (dataCommitting || Promise.resolve()).then(run, run);
 	return dataCommitting;
+}
+
+function setDataCommitError(message) {
+	if (dataCommitError !== message) {
+		dataCommitError = message;
+		pushState();
+	}
 }
 
 let movedFrom = null; // the data folder before the last move (only that one may be removed)
@@ -274,13 +304,13 @@ async function moveDataFolder(target) {
 		if (state === "missing") {
 			fs.rmSync(target, { recursive: true, force: true });
 		}
-		running.forEach(id => startWiki(id));
+		restartWikis(running);
 		throw e;
 	}
 	useDataDir(target);
 	dataChanged("Moved the data folder from " + old);
 	movedFrom = old;
-	running.forEach(id => startWiki(id));
+	restartWikis(running);
 	return { old };
 }
 
@@ -313,11 +343,25 @@ ipcMain.handle("data-folder-use-existing", async (event, target) => {
 		throw new Error("This isn't a TW Desk data folder (it has no config.json): " + folder);
 	}
 	await commitData();
-	await stopAllWikis();
+	const running = await stopAllWikis();
+	try {
+		dataFolder.writePointer(userDataDir(), folder);
+	} catch (e) {
+		restartWikis(running);
+		throw e;
+	}
+	// The local values belong to the replaced setup
 	fs.rmSync(localPath(), { force: true });
-	dataFolder.writePointer(userDataDir(), folder);
 	useDataDir(folder);
 });
+
+function restartWikis(ids) {
+	for (const id of ids) {
+		if (config.wikis.some(w => w.id === id)) {
+			startWiki(id).catch(e => appendLog(id, e.message));
+		}
+	}
+}
 
 // Stops all running wikis and waits until they have stopped; returns their ids
 async function stopAllWikis() {
@@ -385,6 +429,8 @@ async function createDataFolder(target) {
 	if (state === "data") {
 		return useExistingDataFolder(target);
 	}
+	// A wiki started by a link meanwhile uses the store that is moved now
+	const running = await stopAllWikis();
 	try {
 		dataFolder.copyData(userDataDir(), target, ["store", "web"]);
 		const { shared, local } = dataFolder.splitLocal(config);
@@ -401,10 +447,12 @@ async function createDataFolder(target) {
 				fs.rmSync(path.join(target, name), { recursive: true, force: true });
 			}
 		}
+		restartWikis(running);
 		throw e;
 	}
 	removeLegacySetup();
 	useDataDir(target);
+	restartWikis(running);
 	return {};
 }
 
@@ -422,8 +470,8 @@ async function useExistingDataFolder(target) {
 		throw new Error(configError);
 	}
 	await stopAllWikis();
-	fs.rmSync(localPath(), { force: true });
 	dataFolder.writePointer(userDataDir(), target);
+	fs.rmSync(localPath(), { force: true });
 	if (migrating) {
 		removeLegacySetup();
 	}
@@ -630,6 +678,9 @@ function wikiFromInput(input) {
 
 function serverState(id) {
 	const s = servers.get(id);
+	if (restarting.has(id)) {
+		return { status: "starting", error: null, restarting: true };
+	}
 	return s ? { status: s.status, error: s.error } : { status: "stopped", error: null };
 }
 
@@ -645,7 +696,7 @@ function snapshot() {
 		twVersion: TW_VERSION,
 		configPath: configPath(),
 		configError,
-		dataFolder: { path: dataDir, setup: dataSetupNeeded, lost: lostDataDir, suggestion: dataSetupNeeded ? dataFolder.suggestLocation(config.wikis.map(w => w.path), app.getPath("documents"), folderKey) : null },
+		dataFolder: { path: dataDir, commitError: dataCommitError, setup: dataSetupNeeded, lost: lostDataDir, suggestion: dataSetupNeeded ? dataFolder.suggestLocation(config.wikis.map(w => w.path), app.getPath("documents"), folderKey) : null },
 		installDir: app.isPackaged ? path.dirname(process.execPath) : app.getAppPath(),
 		platform: process.platform,
 		caseInsensitivePaths: CASE_INSENSITIVE_PATHS,
@@ -874,12 +925,13 @@ async function startWiki(id) {
 		refreshPluginClashes();
 		appendLog(id, "Server stopped" + (code !== null ? " (exit code " + code + ")" : ""));
 		const win = wikiWindows.get(id);
-		if (win && !win.isDestroyed()) {
+		if (win && !win.isDestroyed() && !restarting.has(id)) {
 			win.close();
 		}
 		pushState();
-		// Not while quitting: the app could exit in the middle of a commit
-		if (!quitting) {
+		// Not while quitting: the app could exit in the middle of a commit; a restart runs the binary policy and
+		// auto-commit with the next real stop
+		if (!quitting && !restarting.has(id)) {
 			afterStop(wiki);
 		}
 	});
@@ -891,6 +943,82 @@ function stopWiki(id) {
 		state.stopping = true;
 		state.child.kill();
 	}
+}
+
+// Whether TiddlyWiki in the window still has changes it hasn't saved to the server (waits a moment for them)
+async function windowDirty(win) {
+	const started = Date.now();
+	while (Date.now() - started < 3000) {
+		let dirty;
+		try {
+			dirty = await win.webContents.executeJavaScript("!!(window.$tw && $tw.syncer && $tw.syncer.isDirty())");
+		} catch (e) {
+			return false;
+		}
+		if (!dirty) {
+			return false;
+		}
+		await new Promise(resolve => setTimeout(resolve, 300));
+	}
+	return true;
+}
+
+// Stops and starts the wiki's server (e.g. after its files changed on disk) and reloads its open window
+async function restartWiki(id) {
+	const wiki = findWiki(id);
+	const state = servers.get(id);
+	if (restarting.has(id) || !state || !["running", "starting"].includes(state.status)) {
+		return false;
+	}
+	const win = wikiWindows.get(id);
+	const open = win && !win.isDestroyed() ? win : null;
+	if (open && await windowDirty(open)) {
+		const answer = dialog.showMessageBoxSync(open, {
+			type: "question",
+			buttons: ["Restart anyway", "Cancel"],
+			defaultId: 1,
+			cancelId: 1,
+			title: "TW Desk",
+			message: "\u201c" + wiki.name + "\u201d has unsaved changes.",
+			detail: "TiddlyWiki is still saving them to the wiki folder. Wait a moment and restart again, or restart anyway and lose those changes."
+		});
+		if (answer !== 0) {
+			return false;
+		}
+	}
+	restarting.add(id);
+	pushState();
+	appendLog(id, "Restarting");
+	try {
+		stopWiki(id);
+		const started = Date.now();
+		while (servers.get(id).child && Date.now() - started < 30000) {
+			await new Promise(resolve => setTimeout(resolve, 100));
+		}
+		await startWiki(id);
+	} catch (e) {
+		appendLog(id, e.message);
+	} finally {
+		restarting.delete(id);
+		pushState();
+	}
+	try {
+		await waitForRunning(id, 60000);
+	} catch (e) {
+		// Like a stop: no server, no window
+		if (open && !open.isDestroyed()) {
+			open.close();
+		}
+		throw e;
+	}
+	if (open && !open.isDestroyed()) {
+		// The changes were asked about already; the page may count failed saves while the server was down
+		open.twDeskReloading = true;
+		open.loadURL(wikiUrl(id)).catch(() => {}).finally(() => {
+			open.twDeskReloading = false;
+		});
+	}
+	return true;
 }
 
 function waitForRunning(id, timeoutMs) {
@@ -934,7 +1062,7 @@ function bringToFront(win) {
 // stopping, so the window is let go without asking.
 function confirmUnload(win, message, detail) {
 	win.webContents.on("will-prevent-unload", event => {
-		const leave = quitting || dialog.showMessageBoxSync(win, {
+		const leave = quitting || win.twDeskReloading || dialog.showMessageBoxSync(win, {
 			type: "question",
 			buttons: ["Close anyway", "Stay"],
 			defaultId: 1,
@@ -956,6 +1084,14 @@ async function ensureRunning(id) {
 	}
 }
 
+// Wiki and snapshot windows: 2700 × 1400, but no larger than the screen they open on (the one with the mouse)
+const WIKI_WINDOW = { width: 2700, height: 1400 };
+
+function wikiWindowSize() {
+	const area = screen.getDisplayNearestPoint(screen.getCursorScreenPoint()).workAreaSize;
+	return { width: Math.min(WIKI_WINDOW.width, area.width), height: Math.min(WIKI_WINDOW.height, area.height) };
+}
+
 async function openWiki(id, external) {
 	const wiki = findWiki(id);
 	await ensureRunning(id);
@@ -970,8 +1106,7 @@ async function openWiki(id, external) {
 		return existing;
 	}
 	const win = new BrowserWindow({
-		width: 1280,
-		height: 900,
+		...wikiWindowSize(),
 		title: wiki.name,
 		autoHideMenuBar: true,
 		webPreferences: { contextIsolation: true, nodeIntegration: false, sandbox: true }
@@ -1164,6 +1299,9 @@ async function gitAction(action, folder, arg) {
 	if (action === "open") {
 		await shell.openPath(resolved);
 		return;
+	}
+	if (isDataDir(resolved) && action !== "init" && !dataFolder.ownRepo(resolved)) {
+		throw new Error("The data folder has no git repository of its own. Initialize one first.");
 	}
 	if (isDataDir(resolved) && ["init", "pull"].includes(action)) {
 		if (action === "init") {
@@ -2667,8 +2805,7 @@ function openSnapshot(id) {
 	}
 	const title = link.name + " (snapshot " + link.snapshot.date.slice(0, 10) + ")";
 	const win = new BrowserWindow({
-		width: 1280,
-		height: 900,
+		...wikiWindowSize(),
 		title,
 		autoHideMenuBar: true,
 		webPreferences: { contextIsolation: true, nodeIntegration: false, sandbox: true }
@@ -2820,6 +2957,7 @@ ipcMain.handle("remove-group", (event, id) => {
 
 ipcMain.handle("start-wiki", (event, id) => startWiki(id));
 ipcMain.handle("stop-wiki", (event, id) => stopWiki(id));
+ipcMain.handle("restart-wiki", (event, id) => restartWiki(id));
 ipcMain.handle("open-wiki", async (event, id, external) => {
 	await openWiki(id, external);
 });

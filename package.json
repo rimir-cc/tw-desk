@@ -1,7 +1,7 @@
 {
   "name": "tw-desk",
   "productName": "TW Desk",
-  "version": "0.2.24",
+  "version": "0.2.25",
   "description": "Small manager for local TiddlyWiki folder wikis",
   "main": "src/main.js",
   "private": true,

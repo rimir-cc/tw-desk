@@ -186,6 +186,7 @@ details.showcase-plugins > summary { cursor: pointer; margin: 4px 0; color: var(
 .menu button:hover:not(:disabled), .menu button:focus-visible { background: var(--accent); color: var(--accent-text); outline: none; }
 .menu-separator { height: 1px; margin: 4px 6px; background: var(--border); }
 .wiki-actions button.more { font-size: 16px; line-height: 1; padding: 3px 8px; }
+.wiki-actions button.restart { font-size: 15px; line-height: 1; padding: 3px 8px; }
 .wiki[draggable=true] { cursor: grab; }
 .wiki[draggable=true] button { cursor: pointer; }
 body.dragging-wiki .wiki { cursor: grabbing; }

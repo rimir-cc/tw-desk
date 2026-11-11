@@ -151,3 +151,19 @@ test("verifyCopy throws on a size mismatch; copyTree includes .git", () => {
 test("DATA_GITIGNORE", () => {
 	assert.equal(dataFolder.DATA_GITIGNORE, "*.tmp\n");
 });
+
+test("wikiExcludes: wikis inside the data folder, as root-anchored git patterns", () => {
+	const data = P("d", "tw-desk-data");
+	const lines = dataFolder.wikiExcludes([P("d", "tw-desk-data", "wikis", "inner"), P("d", "wikis", "outer"), data], data);
+	assert.deepEqual(lines, ["/wikis/inner/"]);
+});
+
+test("withExcludes: replaces only TW Desk's own block", () => {
+	const own = "# mine\n*.bak\n";
+	const once = dataFolder.withExcludes(own, ["/a/"]);
+	assert.equal(once, "# mine\n*.bak\n# TW Desk: wikis inside the data folder\n/a/\n# TW Desk end\n");
+	assert.equal(dataFolder.withExcludes(once, ["/b/", "/c/"]), "# mine\n*.bak\n# TW Desk: wikis inside the data folder\n/b/\n/c/\n# TW Desk end\n");
+	assert.equal(dataFolder.withExcludes(once, []), own);
+	assert.equal(dataFolder.withExcludes("", []), "");
+	assert.equal(dataFolder.withExcludes("x", ["/a/"]), "x\n# TW Desk: wikis inside the data folder\n/a/\n# TW Desk end\n");
+});

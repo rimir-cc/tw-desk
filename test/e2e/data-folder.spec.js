@@ -378,3 +378,60 @@ test("data folder: locate a single wiki that isn't found", async ({ desk }) => {
 	expect((await desk.wikiState("Alpha")).path).toBe(copy);
 	await expect(row.getByRole("button", { name: "Start", exact: true })).toBeEnabled();
 });
+
+// ---------- final review ----------
+
+test("data folder: a broken config.json is never lost when choosing the data folder", async ({ desk }) => {
+	fs.mkdirSync(desk.userData, { recursive: true });
+	fs.writeFileSync(path.join(desk.userData, "config.json"), "{ broken");
+	const existing = preparedDataFolder(desk);
+	await desk.launch({}, { dataEnv: false, writeConfig: false });
+	await expect(setupDialog(desk)).toBeVisible();
+	await desk.page.locator("#data-setup-path").fill(path.join(desk.root, "data"));
+	await desk.page.locator("#data-setup-create").click();
+	await expect(desk.page.locator("#data-setup-error")).toContainText("Could not read");
+	await desk.pick(existing);
+	await desk.page.locator("#data-setup-existing").click();
+	await expect(desk.page.locator("#data-setup-error")).toContainText("Could not read");
+	expect(fs.readFileSync(path.join(desk.userData, "config.json"), "utf8")).toBe("{ broken");
+	expect(fs.existsSync(path.join(desk.root, "data"))).toBe(false);
+	await expect(setupDialog(desk)).toBeVisible();
+});
+
+test("data folder: git without a user identity doesn't block the first start", async ({ desk }) => {
+	const alpha = desk.wiki("alpha");
+	await desk.launch({ wikis: [{ name: "Alpha", path: alpha }] }, {
+		dataEnv: false,
+		env: { GIT_AUTHOR_NAME: "", GIT_AUTHOR_EMAIL: "", GIT_COMMITTER_NAME: "", GIT_COMMITTER_EMAIL: "" }
+	});
+	const target = path.join(desk.root, "tw-desk-data");
+	await desk.page.locator("#data-setup-create").click();
+	await expect(setupDialog(desk)).toBeHidden();
+	expect(desk.rawConfig(target).wikis[0].path).toBe("../wikis/alpha");
+	expect(JSON.parse(fs.readFileSync(path.join(desk.userData, "data-folder.json"), "utf8")).path).toBe(target);
+	await expect(desk.row("Alpha")).toBeVisible();
+});
+
+test("data folder: moving refuses while config.json can't be read", async ({ desk }) => {
+	const data = path.join(desk.root, "data");
+	fs.mkdirSync(data);
+	fs.writeFileSync(path.join(data, "config.json"), "{ broken");
+	desk.useDataDir(data);
+	await desk.launch({}, { writeConfig: false });
+	await openSettings(desk);
+	const target = path.join(desk.root, "data2");
+	await desk.pick(target);
+	await desk.page.locator("#data-move").click();
+	await expect(desk.page.locator("#settings-error")).toContainText("Could not read");
+	expect(fs.existsSync(target)).toBe(false);
+	expect(fs.readFileSync(path.join(data, "config.json"), "utf8")).toBe("{ broken");
+});
+
+test("data folder: one without config.json counts as not found", async ({ desk }) => {
+	const empty = path.join(desk.root, "data");
+	fs.mkdirSync(path.join(empty, ".git"), { recursive: true });
+	writeJson(path.join(desk.userData, "data-folder.json"), { path: empty });
+	await desk.launch({}, { dataEnv: false, writeConfig: false });
+	await expect(desk.page.locator("#data-setup-text")).toContainText("wasn't found");
+	await expect(desk.page.locator("#data-setup-text")).toContainText(empty);
+});

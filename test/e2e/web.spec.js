@@ -66,8 +66,11 @@ test("web wiki: baseline, change check, snapshot and a wiki made from it", async
 		{ title: "Note", text: "version 2" }, { title: "Stays", text: "the same" }, { title: "New", text: "new" },
 		{ title: "$:/HistoryList", text: "[{\"title\":\"Note\"}]" }, { title: "$:/state/tab", text: "x" }
 	]));
+	const baselineBefore = fs.readFileSync(path.join(desk.userData, "web", link.id, "baseline.json"), "utf8");
 	expect((await check()).result).toBe("same");
 	await expect(row.locator(".git-chip.warn")).toHaveCount(0);
+	// A check alone doesn't change the data folder
+	expect(fs.readFileSync(path.join(desk.userData, "web", link.id, "baseline.json"), "utf8")).toBe(baselineBefore);
 
 	// Snapshot: a local copy that opens in an app window
 	await desk.rowMenu(row, "Save snapshot");

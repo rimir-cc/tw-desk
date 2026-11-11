@@ -63,7 +63,9 @@ function resolveDataDir() {
 		return;
 	}
 	const pointer = dataFolder.readPointer(userDataDir());
-	if (pointer && fs.existsSync(pointer)) {
+	// A data folder without its config.json (deleted, half-cloned) counts as not found: starting empty would lose the
+	// wiki list at the next commit
+	if (pointer && fs.existsSync(path.join(pointer, "config.json"))) {
 		dataDir = pointer;
 	} else if (pointer) {
 		dataSetupNeeded = "lost";
@@ -254,6 +256,9 @@ async function moveDataFolder(target) {
 	if (state !== "missing" && state !== "empty") {
 		throw new Error("This folder isn't empty. Choose an empty or a new folder for the data folder.");
 	}
+	if (configError) {
+		throw new Error(configError);
+	}
 	if (inside(target, dataDir) || inside(dataDir, target)) {
 		throw new Error("The new place can't be inside the data folder, or contain it.");
 	}
@@ -355,7 +360,12 @@ async function initDataRepo(dir) {
 		gitState.version = await git.version();
 	}
 	if (gitState.version) {
-		await git.init(dir, { ignore: dataFolder.DATA_GITIGNORE, message: "Initial TW Desk data" });
+		try {
+			await git.init(dir, { ignore: dataFolder.DATA_GITIGNORE, message: "Initial TW Desk data" });
+		} catch (e) {
+			// e.g. no user name/email configured: the data folder works anyway, its chip shows what's missing
+			console.error("Initializing the data folder's repository failed:", e.message);
+		}
 	} else if (!fs.existsSync(path.join(dir, ".gitignore"))) {
 		fs.writeFileSync(path.join(dir, ".gitignore"), dataFolder.DATA_GITIGNORE);
 	}
@@ -363,6 +373,10 @@ async function initDataRepo(dir) {
 
 // A new data folder at target with the current setup (migrated from userData, or empty)
 async function createDataFolder(target) {
+	// The unreadable file would be replaced by an empty setup and then removed
+	if (configError) {
+		throw new Error(configError);
+	}
 	const state = dataFolder.folderState(target);
 	if (state === "other") {
 		throw new Error("This folder isn't empty. Choose an empty folder, or “Use existing data folder…” for a TW Desk data folder.");
@@ -403,6 +417,9 @@ async function useExistingDataFolder(target) {
 		throw new Error("This isn't a TW Desk data folder (it has no config.json): " + target);
 	}
 	const migrating = dataSetupNeeded === "migrate";
+	if (migrating && configError) {
+		throw new Error(configError);
+	}
 	await stopAllWikis();
 	fs.rmSync(localPath(), { force: true });
 	dataFolder.writePointer(userDataDir(), target);
@@ -2589,10 +2606,9 @@ async function checkWebWiki(id) {
 			const index = web.indexOf(page.buffer);
 			if (index.fileHash !== baseline.fileHash) {
 				const diff = web.compare(baseline, index);
-				if (diff && !diff.added && !diff.changed && !diff.removed) {
-					// Only volatile tiddlers or the page around the tiddlers changed; remember the new file
-					writeBaseline(link, page, index);
-				} else {
+				// Only volatile tiddlers or the page around the tiddlers changed: still the version last seen (the
+				// baseline in the data folder stays as it is, so a check alone never makes a commit)
+				if (!(diff && !diff.added && !diff.changed && !diff.removed)) {
 					Object.assign(check, { result: "changed" }, diff || {});
 					if (index.twVersion !== baseline.twVersion) {
 						check.twVersion = index.twVersion;

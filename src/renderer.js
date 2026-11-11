@@ -1622,7 +1622,7 @@ async function repointGroup(group) {
 const DATA_SETUP_TEXTS = {
 	migrate: "TW Desk now keeps your setup – wikis list, settings, plugin store, web wikis – in a data folder you choose, so you can put it under git and move it. Temporary files stay where they are.",
 	new: "Where should TW Desk keep your setup?",
-	lost: path => "Your data folder " + path + " wasn't found. Choose it again, use another one, or create a new one."
+	lost: path => "Your data folder " + path + " wasn't found (or has no config.json). Choose it again, use another one, or create a new one."
 };
 let dataSetupShown = null;
 
